@@ -115,6 +115,24 @@ local function safeRead(path)
     end
 end
 
+-- ── List all saved config files matching a hub prefix ────────────────────────
+local function safeListConfigs(prefix)
+    local results = {}
+    if not listfiles then return results end
+    local ok, files = pcall(listfiles, "")
+    if not ok then return results end
+    for _, path in ipairs(files) do
+        -- normalise slashes, strip directory component
+        local name = path:gsub("\\","/"):match("([^/]+)$") or path
+        if name:match("^" .. prefix:gsub("%-","%-") .. ".*%.json$") then
+            -- strip .json to get the base name
+            table.insert(results, name:sub(1, -6))
+        end
+    end
+    table.sort(results)
+    return results
+end
+
 -- ── Sanitise a user-supplied config name ─────────────────────────────────────
 -- Strips characters that would be dangerous in a file path, collapses spaces
 -- to underscores, and falls back to a default if the result is empty.
@@ -259,26 +277,123 @@ function Library:CreateWindow(Config)
         ClipsDescendants = true,
     })
     Corner(main, 10)
-    Stroke(main, Theme.Accent, 1, 0.45)
+    local mainStroke = Stroke(main, Theme.Accent, 1, 0.45)
+    regAccent(mainStroke, "Color")
     T(main, {Size = UDim2.new(0,620,0,FULL_H)}, 0.38, Enum.EasingStyle.Back)
 
     -- ── Window object ─────────────────────────────────────────────────────────
     local Window = {
-        _tabs        = {},
-        _activeTab   = nil,
-        _activeStrip = nil,
-        _activeIcon  = nil,
+        _tabs          = {},
+        _activeTab     = nil,
+        _activeStrip   = nil,
+        _activeIcon    = nil,
         _activeIconBox = nil,
         _activeTabName = nil,
-        _accentColor = Theme.Accent,
-        _watermark   = nil,
-        _allElements = {},
+        _accentColor   = Theme.Accent,
+        _watermark     = nil,
+        _allElements   = {},
+        -- registered accent-tinted objects for live repaint
+        -- each entry: { obj, prop }  e.g. {scrollbar, "ScrollBarImageColor3"}
+        _accentObjs    = {},
     }
 
+    -- Register an object+property for live accent repaint
+    local function regAccent(obj, prop)
+        table.insert(Window._accentObjs, {obj=obj, prop=prop or "BackgroundColor3"})
+    end
+
     function Window:GetTheme() return self._accentColor end
+
+    -- ── SetTheme: change accent colour + repaint all registered elements ──────
     function Window:SetTheme(color)
         self._accentColor = color
         Theme.Accent      = color
+        Theme.AccentDark  = Color3.new(color.R*0.35, color.G*0.35, color.B*0.35)
+        Theme.TextAccent  = Color3.new(
+            math.min(color.R + 0.15, 1),
+            math.min(color.G + 0.05, 1),
+            math.min(color.B + 0.10, 1)
+        )
+        -- repaint registered objects
+        for _, e in ipairs(self._accentObjs) do
+            if e.obj and e.obj.Parent then
+                pcall(function() e.obj[e.prop] = color end)
+            end
+        end
+        -- repaint separator gradient
+        pcall(function()
+            sepG.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0,    Color3.new(0,0,0)),
+                ColorSequenceKeypoint.new(0.25, color),
+                ColorSequenceKeypoint.new(0.75, color),
+                ColorSequenceKeypoint.new(1,    Color3.new(0,0,0)),
+            })
+        end)
+        -- repaint sidebar gradient top colour
+        pcall(function()
+            local r,g,b = color.R*0.12, color.G*0.02, color.B*0.20
+            sideG.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, Color3.new(r,g,b)),
+                ColorSequenceKeypoint.new(1, Color3.fromRGB(8,8,10)),
+            })
+        end)
+        -- repaint title diamond
+        pcall(function() iconOuter.BackgroundColor3 = color end)
+        -- repaint watermark stroke
+        if self._watermark then
+            local s = self._watermark:FindFirstChildOfClass("UIStroke")
+            if s then s.Color = color end
+        end
+        -- repaint main stroke
+        pcall(function()
+            local ms = main:FindFirstChildOfClass("UIStroke")
+            if ms then ms.Color = color end
+        end)
+    end
+
+    -- ── Built-in theme presets ────────────────────────────────────────────────
+    local ThemePresets = {
+        ["Purple"]   = Color3.fromRGB(170,  0, 255),
+        ["Crimson"]  = Color3.fromRGB(220,  30,  70),
+        ["Cyan"]     = Color3.fromRGB(  0, 210, 240),
+        ["Emerald"]  = Color3.fromRGB( 20, 210,  90),
+        ["Gold"]     = Color3.fromRGB(235, 175,  20),
+        ["Rose"]     = Color3.fromRGB(255,  80, 160),
+        ["Ice"]      = Color3.fromRGB(120, 200, 255),
+        ["Sunset"]   = Color3.fromRGB(255, 110,  50),
+    }
+
+    function Window:GetThemePresets()
+        local names = {}
+        for k in pairs(ThemePresets) do table.insert(names, k) end
+        table.sort(names)
+        return names
+    end
+
+    function Window:ApplyThemePreset(presetName)
+        local col = ThemePresets[presetName]
+        if col then self:SetTheme(col) end
+    end
+
+    -- ── Config file management ─────────────────────────────────────────────────
+    -- Returns a sorted list of base names (no .json) matching this hub's prefix
+    function Window:ListSavedConfigs()
+        return safeListConfigs(defaultConfigName)
+    end
+
+    -- Delete a saved config file
+    function Window:DeleteConfig(customName)
+        local baseName = sanitiseConfigName(customName, defaultConfigName)
+        local filePath = baseName .. ".json"
+        if delfile then
+            local ok = pcall(delfile, filePath)
+            if ok then
+                self:Notify("Config", "Deleted: " .. filePath, 2, "success")
+                return true
+            end
+        end
+        self:Notify("Config", "Could not delete: " .. filePath, 2, "error")
+        return false
     end
 
     -- ── Destroy ───────────────────────────────────────────────────────────────
@@ -579,6 +694,7 @@ function Library:CreateWindow(Config)
         Position = UDim2.new(0,0,1,-1),
         BackgroundColor3 = Theme.Accent,
     })
+    regAccent(sep, "BackgroundColor3")
     local sepG = Instance.new("UIGradient", sep)
     sepG.Color = ColorSequence.new({
         ColorSequenceKeypoint.new(0,    Color3.new(0,0,0)),
@@ -652,6 +768,7 @@ function Library:CreateWindow(Config)
         BackgroundColor3 = Theme.Accent,
         BackgroundTransparency = 0.5,
     })
+    regAccent(divLine, "BackgroundColor3")
     local divG = Instance.new("UIGradient", divLine)
     divG.Color = ColorSequence.new({
         ColorSequenceKeypoint.new(0,   Color3.new(0,0,0)),
@@ -670,7 +787,8 @@ function Library:CreateWindow(Config)
         Font = Enum.Font.Gotham,
     })
     Corner(tabSearchBox, 5)
-    Stroke(tabSearchBox, Theme.Accent, 1, 0.7)
+    local tabSearchStroke = Stroke(tabSearchBox, Theme.Accent, 1, 0.7)
+    regAccent(tabSearchStroke, "Color")
     local tabSearchPad = Instance.new("UIPadding", tabSearchBox)
     tabSearchPad.PaddingLeft = UDim.new(0,6)
 
@@ -714,7 +832,8 @@ function Library:CreateWindow(Config)
         Visible = not useKeySystem,
     })
     Corner(ctrlBar, 7)
-    Stroke(ctrlBar, Theme.Accent, 1, 0.45)
+    local ctrlStroke = Stroke(ctrlBar, Theme.Accent, 1, 0.45)
+    regAccent(ctrlStroke, "Color")
     do
         local cl = Instance.new("UIListLayout", ctrlBar)
         cl.FillDirection       = Enum.FillDirection.Horizontal
@@ -853,6 +972,7 @@ function Library:CreateWindow(Config)
             BackgroundTransparency = 1,
         })
         Corner(strip, 2)
+        regAccent(strip, "BackgroundColor3")
 
         tabBtn.MouseEnter:Connect(function()
             if Window._activeTab ~= tabBtn then
@@ -875,6 +995,7 @@ function Library:CreateWindow(Config)
         scroll.ScrollBarImageColor3 = Theme.Accent
         scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
         scroll.Visible = false
+        regAccent(scroll, "ScrollBarImageColor3")
 
         local sLayout = Instance.new("UIListLayout", scroll)
         sLayout.Padding   = UDim.new(0,6)
