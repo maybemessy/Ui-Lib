@@ -461,7 +461,11 @@ function Library:CreateWindow(Config)
 
         --// Dropdown
         function TabElements:CreateDropdown(label, options, callback)
+            -- Create a unique order ID based on current children count to keep them paired
+            local orderBase = #scrollFrame:GetChildren() * 2 
+
             local btn = Instance.new("TextButton", scrollFrame)
+            btn.LayoutOrder = orderBase -- Set button order
             btn.Size = UDim2.new(1, -10, 0, 30)
             btn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
             btn.Font = Enum.Font.Code
@@ -478,6 +482,7 @@ function Library:CreateWindow(Config)
             arrow.Text = "▼"
 
             local dropFrame = Instance.new("Frame", scrollFrame)
+            dropFrame.LayoutOrder = orderBase + 1 -- Ensure it is always exactly below the button
             dropFrame.Size = UDim2.new(1, -10, 0, 0)
             dropFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
             dropFrame.ClipsDescendants = true
@@ -497,8 +502,11 @@ function Library:CreateWindow(Config)
             scroll.Position = UDim2.new(0, 0, 0, 30)
             scroll.BackgroundTransparency = 1
             scroll.ScrollBarThickness = 4
+            scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+            
             local dLayout = Instance.new("UIListLayout", scroll)
             dLayout.Padding = UDim.new(0, 2)
+            dLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 
             local isOpen = false
             local btns = {}
@@ -513,8 +521,10 @@ function Library:CreateWindow(Config)
                 oBtn.MouseButton1Click:Connect(function()
                     btn.Text = opt
                     isOpen = false
-                    dropFrame.Visible = false
                     arrow.Text = "▼"
+                    TweenService:Create(dropFrame, TweenInfo.new(0.2), {Size = UDim2.new(1, -10, 0, 0)}):Play()
+                    task.wait(0.2)
+                    dropFrame.Visible = false
                     pcall(callback, opt)
                 end)
                 table.insert(btns, oBtn)
@@ -539,16 +549,20 @@ function Library:CreateWindow(Config)
             btn.MouseButton1Click:Connect(function()
                 isOpen = not isOpen
                 arrow.Text = isOpen and "▲" or "▼"
-                dropFrame.Visible = isOpen
+                
                 if isOpen then
+                    dropFrame.Visible = true
                     scroll.CanvasSize = UDim2.new(0, 0, 0, #btns * 27)
                     TweenService:Create(dropFrame, TweenInfo.new(0.2), {Size = UDim2.new(1, -10, 0, math.min(#btns * 27 + 35, 150))}):Play()
                 else
-                    TweenService:Create(dropFrame, TweenInfo.new(0.2), {Size = UDim2.new(1, -10, 0, 0)}):Play()
+                    local anim = TweenService:Create(dropFrame, TweenInfo.new(0.2), {Size = UDim2.new(1, -10, 0, 0)})
+                    anim:Play()
+                    anim.Completed:Wait()
+                    if not isOpen then dropFrame.Visible = false end
                 end
             end)
         end
-
+        
         return TabElements
     end
 
