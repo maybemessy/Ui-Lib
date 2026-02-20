@@ -241,12 +241,14 @@ function Library:CreateWindow(Config)
 
     -- ── Main Frame ────────────────────────────────────────────────────────────
     local FULL_H = 370
+    -- FIX: Draggable=true on the whole frame steals mouse from sliders.
+    -- We use manual drag on the title bar only instead.
     local main = Frame(sg, {
         Size             = UDim2.new(0,620,0,0),
         Position         = UDim2.new(0.5,-310,0.5,-185),
         BackgroundColor3 = Theme.BgMain,
         Active           = true,
-        Draggable        = true,
+        Draggable        = false,   -- NEVER true — handled manually below
         Visible          = false,
         ClipsDescendants = true,
     })
@@ -254,29 +256,45 @@ function Library:CreateWindow(Config)
     local mainStroke = Stroke(main, Theme.Accent, 1, 0.45)
     regAccent(mainStroke, "Color")
 
-    -- ── Background Image Layer (NEW) ─────────────────────────────────────────
-    -- Sits behind everything in main; set via Window:SetBackgroundImage(url, transparency)
+    -- Global flag: true while any slider is being dragged.
+    -- Title-bar drag checks this so sliders never fight the window move.
+    local _anySliderDragging = false
+
+    -- ── Background Image Layer ────────────────────────────────────────────────
+    -- ZIndex must be >= 1 in Roblox. Sidebar and contentArea are made
+    -- semi-transparent when a bg image is active so the image bleeds through.
     local bgImageLabel = nil
     local function applyBgImage(url, trans)
         if not url or url == "" then
             if bgImageLabel then bgImageLabel.Visible = false end
+            -- Restore opaque panels
+            pcall(function() sidebar.BackgroundTransparency     = 0 end)
+            pcall(function() contentArea.BackgroundTransparency = 0 end)
+            pcall(function() main.BackgroundTransparency        = 0 end)
             return
         end
         if not bgImageLabel then
             bgImageLabel = Instance.new("ImageLabel", main)
-            bgImageLabel.Name              = "BgImage"
-            bgImageLabel.Size              = UDim2.new(1,0,1,0)
-            bgImageLabel.Position          = UDim2.new(0,0,0,0)
+            bgImageLabel.Name                   = "BgImage"
+            bgImageLabel.Size                   = UDim2.new(1,0,1,0)
+            bgImageLabel.Position               = UDim2.new(0,0,0,0)
             bgImageLabel.BackgroundTransparency = 1
-            bgImageLabel.ScaleType         = Enum.ScaleType.Crop
-            bgImageLabel.ZIndex            = 0
+            bgImageLabel.ScaleType              = Enum.ScaleType.Crop
+            bgImageLabel.ZIndex                 = 1   -- must be >= 1
             Corner(bgImageLabel, 10)
         end
-        bgImageLabel.Image              = url
-        bgImageLabel.ImageTransparency  = trans or bgImageTrans
-        bgImageLabel.Visible            = true
+        bgImageLabel.Image             = url
+        bgImageLabel.ImageTransparency = trans or bgImageTrans
+        bgImageLabel.Visible           = true
+        -- Make panels semi-transparent so the image shows through
+        pcall(function() main.BackgroundTransparency        = 0.15 end)
+        pcall(function() sidebar.BackgroundTransparency     = 0.55 end)
+        pcall(function() contentArea.BackgroundTransparency = 0.60 end)
     end
-    if bgImageUrl then applyBgImage(bgImageUrl, bgImageTrans) end
+    if bgImageUrl then
+        -- Defer so sidebar/contentArea exist by the time we run
+        task.defer(function() applyBgImage(bgImageUrl, bgImageTrans) end)
+    end
 
     local function openMain()
         if useKeySystem then return end
@@ -392,25 +410,15 @@ function Library:CreateWindow(Config)
         end)
     end
 
-    -- NEW: Set background image at runtime
+    -- Set background image at runtime
     function Window:SetBackgroundImage(url, transparency)
-        bgImageTrans = transparency or bgImageTrans
+        bgImageTrans = transparency ~= nil and transparency or bgImageTrans
         applyBgImage(url, bgImageTrans)
-        -- Reduce sidebar/content opacity slightly so image shows through
-        if url and url ~= "" then
-            pcall(function()
-                main.BackgroundTransparency = 0.1
-            end)
-        else
-            pcall(function()
-                main.BackgroundTransparency = 0
-            end)
-        end
     end
 
-    -- NEW: Remove/clear background image
+    -- Remove/clear background image
     function Window:ClearBackgroundImage()
-        if bgImageLabel then bgImageLabel.Visible = false end
+        applyBgImage("", 1)
     end
 
     -- ── Built-in theme presets ────────────────────────────────────────────────
@@ -872,6 +880,57 @@ function Library:CreateWindow(Config)
         end
     end)
 
+    -- ── Manual drag on title bar (mouse + touch, slider-safe) ────────────────
+    do
+        local dragging, dragStart, startPos = false, nil, nil
+
+        local function beginDrag(inputPos)
+            if _anySliderDragging then return end
+            dragging  = true
+            dragStart = inputPos
+            startPos  = main.Position
+        end
+        local function moveDrag(inputPos)
+            if not dragging then return end
+            local delta = inputPos - dragStart
+            main.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+        end
+        local function endDrag() dragging = false end
+
+        -- Mouse
+        titleBar.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                beginDrag(Vector2.new(i.Position.X, i.Position.Y))
+            end
+        end)
+        conn(UserInputService.InputChanged:Connect(function(i)
+            if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+                moveDrag(Vector2.new(i.Position.X, i.Position.Y))
+            end
+        end))
+        conn(UserInputService.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then endDrag() end
+        end))
+
+        -- Touch (mobile)
+        titleBar.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.Touch then
+                beginDrag(Vector2.new(i.Position.X, i.Position.Y))
+            end
+        end)
+        conn(UserInputService.InputChanged:Connect(function(i)
+            if dragging and i.UserInputType == Enum.UserInputType.Touch then
+                moveDrag(Vector2.new(i.Position.X, i.Position.Y))
+            end
+        end))
+        conn(UserInputService.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.Touch then endDrag() end
+        end))
+    end
+
     -- ── Sidebar ───────────────────────────────────────────────────────────────
     sidebar = Frame(main, {
         Size = UDim2.new(0,158,1,-34),
@@ -952,7 +1011,6 @@ function Library:CreateWindow(Config)
         Position = UDim2.new(1,-105,0,8),
         BackgroundColor3 = Theme.BgElement,
         BackgroundTransparency = 0.15,
-        Draggable = true,
         Visible = not useKeySystem,
     })
     Corner(ctrlBar, 7)
@@ -964,6 +1022,27 @@ function Library:CreateWindow(Config)
         cl.VerticalAlignment   = Enum.VerticalAlignment.Center
         cl.HorizontalAlignment = Enum.HorizontalAlignment.Center
         cl.Padding             = UDim.new(0,3)
+    end
+    -- Manual drag for ctrlBar (mouse + touch)
+    do
+        local cd, cs, cp = false, nil, nil
+        ctrlBar.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1
+            or i.UserInputType == Enum.UserInputType.Touch then
+                cd = true; cs = Vector2.new(i.Position.X, i.Position.Y); cp = ctrlBar.Position
+            end
+        end)
+        conn(UserInputService.InputChanged:Connect(function(i)
+            if cd and (i.UserInputType == Enum.UserInputType.MouseMovement
+                    or i.UserInputType == Enum.UserInputType.Touch) then
+                local d = Vector2.new(i.Position.X, i.Position.Y) - cs
+                ctrlBar.Position = UDim2.new(cp.X.Scale, cp.X.Offset+d.X, cp.Y.Scale, cp.Y.Offset+d.Y)
+            end
+        end))
+        conn(UserInputService.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1
+            or i.UserInputType == Enum.UserInputType.Touch then cd = false end
+        end))
     end
 
     local function CtrlBtn(txt)
@@ -989,8 +1068,13 @@ function Library:CreateWindow(Config)
     end)
     lockBtn.MouseButton1Click:Connect(function()
         isLocked = not isLocked
-        main.Draggable = not isLocked
+        -- Dragging is manual now — just toggle the flag
         lockBtn.Text = isLocked and "Unlock" or "Lock"
+    end)
+    -- Expose lock state so manual drag respects it
+    Window._isLocked = false
+    lockBtn.MouseButton1Click:Connect(function()
+        Window._isLocked = not Window._isLocked
     end)
 
     tabSearchBox:GetPropertyChangedSignal("Text"):Connect(function()
@@ -1363,6 +1447,10 @@ function Library:CreateWindow(Config)
             end
 
             hit.MouseButton1Click:Connect(function() setState(not state) end)
+            -- Mobile touch support
+            hit.InputEnded:Connect(function(i)
+                if i.UserInputType == Enum.UserInputType.Touch then setState(not state) end
+            end)
             regElem(text, function() return state end, function(v) setState(v==true or v=="true") end)
 
             local ToggleObj = {}
@@ -1375,7 +1463,6 @@ function Library:CreateWindow(Config)
         function TabElements:CreateInput(placeholder, defaultText, callback)
             local f = ElemFrame(32)
             Stroke(f, Theme.Accent, 1, 0.65)
-            -- FIX: arrow indicator now non-interactive and properly z-indexed
             local arrowLbl = Label(f, {
                 Size=UDim2.new(0,28,1,0),
                 Text=">>",
@@ -1391,10 +1478,18 @@ function Library:CreateWindow(Config)
                 Font=Enum.Font.Code,
                 ZIndex=2,
             })
-            inp.Focused:Connect(function() local s=f:FindFirstChildOfClass("UIStroke"); if s then s.Transparency=0 end end)
-            inp.FocusLost:Connect(function(enter)
+            inp.Focused:Connect(function()
+                local s=f:FindFirstChildOfClass("UIStroke"); if s then s.Transparency=0 end
+            end)
+            -- FIX: fire callback on every keystroke so the caller always has the
+            -- latest value even if the user never presses Enter.
+            inp:GetPropertyChangedSignal("Text"):Connect(function()
+                pcall(callback, inp.Text)
+            end)
+            inp.FocusLost:Connect(function()
                 local s=f:FindFirstChildOfClass("UIStroke"); if s then s.Transparency=0.65 end
-                if enter then pcall(callback, inp.Text) end
+                -- Also fire on focus-lost so final value is always committed
+                pcall(callback, inp.Text)
             end)
             regElem(placeholder, function() return inp.Text end, function(v) inp.Text=tostring(v) end)
 
@@ -1432,13 +1527,34 @@ function Library:CreateWindow(Config)
                 throttledCb(val)
             end
 
+            -- Helper: X position from any input object
+            local function posFromInput(i)
+                return math.clamp(
+                    (i.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+            end
+
             numBox.FocusLost:Connect(function() apply(tonumber(numBox.Text) or defVal) end)
-            local drag=false
-            track.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drag=true; apply(minVal+(maxVal-minVal)*math.clamp((i.Position.X-track.AbsolutePosition.X)/track.AbsoluteSize.X,0,1)) end end)
-            conn(UserInputService.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drag=false end end))
+            local drag = false
+
+            -- FIX: accept both Mouse and Touch; set _anySliderDragging so title bar won't move
+            track.InputBegan:Connect(function(i)
+                if i.UserInputType == Enum.UserInputType.MouseButton1
+                or i.UserInputType == Enum.UserInputType.Touch then
+                    drag = true
+                    _anySliderDragging = true
+                    apply(minVal + (maxVal-minVal) * posFromInput(i))
+                end
+            end)
+            conn(UserInputService.InputEnded:Connect(function(i)
+                if i.UserInputType == Enum.UserInputType.MouseButton1
+                or i.UserInputType == Enum.UserInputType.Touch then
+                    if drag then drag = false; _anySliderDragging = false end
+                end
+            end))
             conn(UserInputService.InputChanged:Connect(function(i)
-                if drag and i.UserInputType==Enum.UserInputType.MouseMovement then
-                    apply(minVal+(maxVal-minVal)*math.clamp((i.Position.X-track.AbsolutePosition.X)/track.AbsoluteSize.X,0,1))
+                if drag and (i.UserInputType == Enum.UserInputType.MouseMovement
+                          or i.UserInputType == Enum.UserInputType.Touch) then
+                    apply(minVal + (maxVal-minVal) * posFromInput(i))
                 end
             end))
             regElem(labelText, function() return tonumber(numBox.Text) end, function(v) apply(tonumber(v) or defVal) end)
@@ -1462,30 +1578,37 @@ function Library:CreateWindow(Config)
             knob.AnchorPoint=Vector2.new(0.5,0)
             local curIdx = defIdx
             local function setStep(idx)
-                idx = math.clamp(idx,1,#steps)
-                curIdx = idx
+                idx = math.clamp(idx,1,#steps); curIdx = idx
                 local r = #steps>1 and (idx-1)/(#steps-1) or 0
-                fill.Size = UDim2.new(r,0,1,0)
-                knob.Position = UDim2.new(r,0,0.5,-8)
+                fill.Size = UDim2.new(r,0,1,0); knob.Position = UDim2.new(r,0,0.5,-8)
                 valLbl.Text = labelText.." :  "..tostring(steps[idx])
                 pcall(callback, steps[idx], idx)
             end
             setStep(defIdx)
             Corner(knob,8); Stroke(knob,Theme.Accent,2,0)
 
+            local function rFromInput(i)
+                return math.clamp((i.Position.X-track.AbsolutePosition.X)/track.AbsoluteSize.X,0,1)
+            end
+
             local drag=false
             track.InputBegan:Connect(function(i)
-                if i.UserInputType==Enum.UserInputType.MouseButton1 then
-                    drag=true
-                    local r=math.clamp((i.Position.X-track.AbsolutePosition.X)/track.AbsoluteSize.X,0,1)
-                    setStep(math.floor(r*(#steps-1)+0.5)+1)
+                if i.UserInputType==Enum.UserInputType.MouseButton1
+                or i.UserInputType==Enum.UserInputType.Touch then
+                    drag=true; _anySliderDragging=true
+                    setStep(math.floor(rFromInput(i)*(#steps-1)+0.5)+1)
                 end
             end)
-            conn(UserInputService.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drag=false end end))
+            conn(UserInputService.InputEnded:Connect(function(i)
+                if i.UserInputType==Enum.UserInputType.MouseButton1
+                or i.UserInputType==Enum.UserInputType.Touch then
+                    if drag then drag=false; _anySliderDragging=false end
+                end
+            end))
             conn(UserInputService.InputChanged:Connect(function(i)
-                if drag and i.UserInputType==Enum.UserInputType.MouseMovement then
-                    local r=math.clamp((i.Position.X-track.AbsolutePosition.X)/track.AbsoluteSize.X,0,1)
-                    setStep(math.floor(r*(#steps-1)+0.5)+1)
+                if drag and (i.UserInputType==Enum.UserInputType.MouseMovement
+                          or i.UserInputType==Enum.UserInputType.Touch) then
+                    setStep(math.floor(rFromInput(i)*(#steps-1)+0.5)+1)
                 end
             end))
 
@@ -2050,11 +2173,20 @@ function Library:CreateWindow(Config)
             end
 
             wheelHit.InputBegan:Connect(function(i)
-                if i.UserInputType==Enum.UserInputType.MouseButton1 then wheelDrag=true; applyWheelPos(i.Position.X, i.Position.Y) end
+                if i.UserInputType==Enum.UserInputType.MouseButton1
+                or i.UserInputType==Enum.UserInputType.Touch then
+                    wheelDrag=true; applyWheelPos(i.Position.X, i.Position.Y)
+                end
             end)
-            conn(UserInputService.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then wheelDrag=false end end))
+            conn(UserInputService.InputEnded:Connect(function(i)
+                if i.UserInputType==Enum.UserInputType.MouseButton1
+                or i.UserInputType==Enum.UserInputType.Touch then wheelDrag=false end
+            end))
             conn(UserInputService.InputChanged:Connect(function(i)
-                if wheelDrag and i.UserInputType==Enum.UserInputType.MouseMovement then applyWheelPos(i.Position.X, i.Position.Y) end
+                if wheelDrag and (i.UserInputType==Enum.UserInputType.MouseMovement
+                               or i.UserInputType==Enum.UserInputType.Touch) then
+                    applyWheelPos(i.Position.X, i.Position.Y)
+                end
             end))
 
             local V_W, V_H = 18, WHEEL_SIZE
@@ -2078,9 +2210,22 @@ function Library:CreateWindow(Config)
                 updateVGrad(); syncRGBFromHSV(); fireCallback()
             end
 
-            vHit.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then vDrag=true; applyV(i.Position.Y) end end)
-            conn(UserInputService.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then vDrag=false end end))
-            conn(UserInputService.InputChanged:Connect(function(i) if vDrag and i.UserInputType==Enum.UserInputType.MouseMovement then applyV(i.Position.Y) end end))
+            vHit.InputBegan:Connect(function(i)
+                if i.UserInputType==Enum.UserInputType.MouseButton1
+                or i.UserInputType==Enum.UserInputType.Touch then
+                    vDrag=true; applyV(i.Position.Y)
+                end
+            end)
+            conn(UserInputService.InputEnded:Connect(function(i)
+                if i.UserInputType==Enum.UserInputType.MouseButton1
+                or i.UserInputType==Enum.UserInputType.Touch then vDrag=false end
+            end))
+            conn(UserInputService.InputChanged:Connect(function(i)
+                if vDrag and (i.UserInputType==Enum.UserInputType.MouseMovement
+                           or i.UserInputType==Enum.UserInputType.Touch) then
+                    applyV(i.Position.Y)
+                end
+            end))
 
             local hexRow = Frame(wheelPanel, {Size=UDim2.new(0,WHEEL_SIZE+8+V_W,0,24), Position=UDim2.new(0,0,0,WHEEL_SIZE+6), BackgroundTransparency=1})
             Label(hexRow, {Size=UDim2.new(0,26,1,0), Text="#HEX", Font=Enum.Font.GothamBold, TextSize=10, TextColor3=Theme.TextSecondary})
@@ -2144,17 +2289,23 @@ function Library:CreateWindow(Config)
                 end
 
                 local drg = false
+                local function rFromTk(i)
+                    return math.clamp((i.Position.X-tk.AbsolutePosition.X)/tk.AbsoluteSize.X,0,1)*255
+                end
                 tk.InputBegan:Connect(function(i)
-                    if i.UserInputType==Enum.UserInputType.MouseButton1 then
-                        drg=true; setVal(math.clamp((i.Position.X-tk.AbsolutePosition.X)/tk.AbsoluteSize.X,0,1)*255)
-                        onSet(cur); updateHSVFromRGB()
+                    if i.UserInputType==Enum.UserInputType.MouseButton1
+                    or i.UserInputType==Enum.UserInputType.Touch then
+                        drg=true; setVal(rFromTk(i)); onSet(cur); updateHSVFromRGB()
                     end
                 end)
-                conn(UserInputService.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drg=false end end))
+                conn(UserInputService.InputEnded:Connect(function(i)
+                    if i.UserInputType==Enum.UserInputType.MouseButton1
+                    or i.UserInputType==Enum.UserInputType.Touch then drg=false end
+                end))
                 conn(UserInputService.InputChanged:Connect(function(i)
-                    if drg and i.UserInputType==Enum.UserInputType.MouseMovement then
-                        setVal(math.clamp((i.Position.X-tk.AbsolutePosition.X)/tk.AbsoluteSize.X,0,1)*255)
-                        onSet(cur); updateHSVFromRGB()
+                    if drg and (i.UserInputType==Enum.UserInputType.MouseMovement
+                             or i.UserInputType==Enum.UserInputType.Touch) then
+                        setVal(rFromTk(i)); onSet(cur); updateHSVFromRGB()
                     end
                 end))
                 vb.FocusLost:Connect(function() setVal(tonumber(vb.Text) or cur); onSet(cur); updateHSVFromRGB() end)
