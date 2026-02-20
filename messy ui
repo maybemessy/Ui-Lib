@@ -1,12 +1,4 @@
 --// MessyHub UI Library (Patched & Fixed)
---// Fixes applied:
---//   1. Added TextSize to slider numBox
---//   2. Wired up numBox FocusLost to update slider
---//   3. Added UICorner to slider fill
---//   4. Replaced unreliable LayoutOrder logic with incrementing counter
---//   5. Wrapped HttpGet in pcall for key system error safety
---//   6. Fixed footerLabel bottom offset
-
 local Library = {}
 
 local Players = game:GetService("Players")
