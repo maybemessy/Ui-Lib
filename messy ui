@@ -1325,29 +1325,64 @@ function Library:CreateWindow(Config)
 
         -- ── Section ───────────────────────────────────────────────────────────
         function TabElements:CreateSection(sTitle)
-            local wrapper = Frame(scroll, {LayoutOrder=nxt(), Size=UDim2.new(1,0,0,32), BackgroundColor3=Theme.BgElement, ClipsDescendants=true})
-            Corner(wrapper,8); Stroke(wrapper, Theme.Accent,1,0.72)
+            -- Outer wrapper: fixed 32px when collapsed, AutomaticSize=Y when expanded.
+            -- ClipsDescendants stays true so collapsed state never bleeds into the next element.
+            local wrapper = Frame(scroll, {
+                LayoutOrder      = nxt(),
+                Size             = UDim2.new(1,0,0,32),
+                BackgroundColor3 = Theme.BgElement,
+                ClipsDescendants = true,
+                AutomaticSize    = Enum.AutomaticSize.None,  -- starts manual (collapsed)
+            })
+            Corner(wrapper,8); Stroke(wrapper, Theme.Accent, 1, 0.72)
+
+            -- Header row — always 32px, click to toggle
             local hdr = Btn(wrapper, {Size=UDim2.new(1,0,0,32), BackgroundTransparency=1, Text=""})
             local aBox = Frame(hdr, {Size=UDim2.new(0,18,0,18), Position=UDim2.new(0,8,0.5,-9), BackgroundColor3=Theme.BgElement2})
             Corner(aBox,4)
             local aLbl = Label(aBox, {Size=UDim2.new(1,0,1,0), Text="+", Font=Enum.Font.GothamBold, TextSize=13, TextColor3=Theme.TextAccent})
-            Label(hdr, {Size=UDim2.new(1,-40,1,0), Position=UDim2.new(0,32,0,0), Text=sTitle, Font=Enum.Font.GothamBold, TextSize=13, TextColor3=Theme.TextAccent, TextXAlignment=Enum.TextXAlignment.Left})
-            local inner = Frame(wrapper, {Size=UDim2.new(1,0,1,-32), Position=UDim2.new(0,0,0,32), BackgroundTransparency=1})
-            local iL = Instance.new("UIListLayout", inner); iL.Padding = UDim.new(0,5)
+            Label(hdr, {Size=UDim2.new(1,-40,1,0), Position=UDim2.new(0,32,0,0), Text=sTitle,
+                Font=Enum.Font.GothamBold, TextSize=13, TextColor3=Theme.TextAccent,
+                TextXAlignment=Enum.TextXAlignment.Left})
+
+            -- Content area: AutomaticSize=Y so it grows with its children.
+            -- Hidden by default (wrapper is clipped to 32px).
+            local inner = Frame(wrapper, {
+                Size             = UDim2.new(1,0,0,0),
+                Position         = UDim2.new(0,0,0,32),
+                BackgroundTransparency = 1,
+                AutomaticSize    = Enum.AutomaticSize.Y,
+            })
+            local iL = Instance.new("UIListLayout", inner)
+            iL.Padding   = UDim.new(0,5)
+            iL.SortOrder = Enum.SortOrder.LayoutOrder
             local iP = Instance.new("UIPadding", inner)
-            iP.PaddingLeft=UDim.new(0,8); iP.PaddingRight=UDim.new(0,8)
-            iP.PaddingTop=UDim.new(0,4);  iP.PaddingBottom=UDim.new(0,8)
+            iP.PaddingLeft   = UDim.new(0,8); iP.PaddingRight  = UDim.new(0,8)
+            iP.PaddingTop    = UDim.new(0,6); iP.PaddingBottom = UDim.new(0,10)
+
             local exp = false
-            local function refresh() local h=iL.AbsoluteContentSize.Y+20; if exp then T(wrapper,{Size=UDim2.new(1,0,0,32+h)},0.2) end end
-            iL:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refresh)
             hdr.MouseButton1Click:Connect(function()
-                exp = not exp; aLbl.Text = exp and "-" or "+"
-                if exp then refresh() else T(wrapper,{Size=UDim2.new(1,0,0,32)},0.2) end
+                exp = not exp
+                aLbl.Text = exp and "-" or "+"
+                if exp then
+                    -- Let AutomaticSize drive the wrapper height
+                    wrapper.AutomaticSize    = Enum.AutomaticSize.Y
+                    wrapper.ClipsDescendants = false
+                else
+                    -- Snap back to manual 32px and re-clip
+                    wrapper.AutomaticSize    = Enum.AutomaticSize.None
+                    wrapper.Size             = UDim2.new(1,0,0,32)
+                    wrapper.ClipsDescendants = true
+                end
             end)
+
+            local labelOrder = 0
             local S = {}
             function S:AddLabel(t)
-                local lbl = Label(inner, {
-                    Size            = UDim2.new(1,0,0,0),   -- height driven by AutomaticSize
+                labelOrder += 1
+                Label(inner, {
+                    LayoutOrder     = labelOrder,
+                    Size            = UDim2.new(1,0,0,0),
                     AutomaticSize   = Enum.AutomaticSize.Y,
                     Text            = t,
                     TextSize        = 12,
@@ -1358,11 +1393,13 @@ function Library:CreateWindow(Config)
                 })
             end
             function S:AddButton(t,cb)
-                local b=Btn(inner,{Size=UDim2.new(1,0,0,28),BackgroundColor3=Theme.BgElement2,Text=t,TextSize=13}); Corner(b,5)
-                b.MouseEnter:Connect(function() T(b,{BackgroundColor3=Theme.AccentDark},0.1) end)
-                b.MouseLeave:Connect(function() T(b,{BackgroundColor3=Theme.BgElement2},0.1) end)
+                labelOrder += 1
+                local b = Btn(inner, {LayoutOrder=labelOrder, Size=UDim2.new(1,0,0,28), BackgroundColor3=Theme.BgElement2, Text=t, TextSize=13})
+                Corner(b,5)
+                b.MouseEnter:Connect(function()  T(b,{BackgroundColor3=Theme.AccentDark},0.1) end)
+                b.MouseLeave:Connect(function()  T(b,{BackgroundColor3=Theme.BgElement2},0.1) end)
                 b.MouseButton1Down:Connect(function() T(b,{BackgroundColor3=Theme.Accent},0.07) end)
-                b.MouseButton1Up:Connect(function() T(b,{BackgroundColor3=Theme.AccentDark},0.1) end)
+                b.MouseButton1Up:Connect(function()   T(b,{BackgroundColor3=Theme.AccentDark},0.1) end)
                 b.MouseButton1Click:Connect(function() pcall(cb) end)
             end
             return S
