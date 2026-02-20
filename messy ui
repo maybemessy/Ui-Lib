@@ -295,18 +295,17 @@ function Library:CreateWindow(Config)
 
     -- ── Window object ─────────────────────────────────────────────────────────
     local Window = {
-        _tabs          = {},
-        _activeTab     = nil,
-        _activeStrip   = nil,
-        _activeIcon    = nil,
-        _activeIconBox = nil,
-        _activeTabName = nil,
-        _accentColor   = Theme.Accent,
-        _watermark     = nil,
-        _allElements   = {},
-        -- registered accent-tinted objects for live repaint
-        -- each entry: { obj, prop }  e.g. {scrollbar, "ScrollBarImageColor3"}
-        _accentObjs    = {},
+        _tabs               = {},
+        _activeTab          = nil,
+        _activeStrip        = nil,
+        _activeIcon         = nil,
+        _activeIconBox      = nil,
+        _activeTabName      = nil,
+        _accentColor        = Theme.Accent,
+        _watermark          = nil,
+        _allElements        = {},
+        _accentObjs         = {},
+        _tabOpenCallbacks   = {},   -- name → {fn, fn, ...}
     }
 
     -- Register an object+property for live accent repaint
@@ -406,6 +405,13 @@ function Library:CreateWindow(Config)
         end
         self:Notify("Config", "Could not delete: " .. filePath, 2, "error")
         return false
+    end
+
+    -- ── ToggleCursorRing: show or hide the cursor ring at runtime ─────────────
+    function Window:ToggleCursorRing(state)
+        if cursorRing then
+            cursorRing.Visible = state
+        end
     end
 
     -- ── Destroy ───────────────────────────────────────────────────────────────
@@ -1049,6 +1055,9 @@ function Library:CreateWindow(Config)
             Window._activeIcon     = iconLbl
             Window._activeIconBox  = iconBox
             Window._activeTabName  = tabName
+            -- fire any registered on-open callbacks for this tab name
+            local cbs = Window._tabOpenCallbacks[name]
+            if cbs then for _, cb in ipairs(cbs) do pcall(cb) end end
         end
 
         tabBtn.MouseButton1Click:Connect(selectTab)
@@ -2186,6 +2195,15 @@ function Library:CreateWindow(Config)
     -- ── Window-level API ──────────────────────────────────────────────────────
     function Window:SetTab(name)
         if self._tabs[name] then self._tabs[name]() end
+    end
+
+    -- Register a callback to fire whenever a tab is opened (by click or SetTab)
+    -- Usage: Window:OnTabOpen("Config", function() ... end)
+    function Window:OnTabOpen(name, fn)
+        if not self._tabOpenCallbacks[name] then
+            self._tabOpenCallbacks[name] = {}
+        end
+        table.insert(self._tabOpenCallbacks[name], fn)
     end
 
     -- Cleanup
