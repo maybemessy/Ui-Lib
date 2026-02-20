@@ -1,4 +1,4 @@
---// MessyHub UI Library (Fixed Dropdown Positioning & Selection Outline)
+--// MessyHub UI Library (Restored Slider, Dropdown & Fixes)
 local Library = {}
 
 local Players = game:GetService("Players")
@@ -58,8 +58,8 @@ function Library:CreateWindow(Config)
     main.Active = true
     main.Draggable = true
     main.Visible = not useKeySystem 
-    main.SelectionGroup = true -- Fix: Set group
-    main.SelectionImageObject = EmptySelection -- Fix: Hide outline
+    main.SelectionGroup = true
+    main.SelectionImageObject = EmptySelection
     Instance.new("UICorner", main).CornerRadius = UDim.new(0, 8)
 
     local controlsGui = Instance.new("Frame", screenGui)
@@ -187,8 +187,8 @@ function Library:CreateWindow(Config)
         keyFrame.Size = UDim2.new(0, 300, 0, 160)
         keyFrame.Position = UDim2.new(0.5, -150, 0.5, -80)
         keyFrame.BackgroundColor3 = Color3.new(0, 0, 0)
-        keyFrame.SelectionGroup = true -- Fix: Set group
-        keyFrame.SelectionImageObject = EmptySelection -- Fix: Hide outline
+        keyFrame.SelectionGroup = true
+        keyFrame.SelectionImageObject = EmptySelection
         Instance.new("UICorner", keyFrame).CornerRadius = UDim.new(0, 12)
 
         local keyTitle = Instance.new("TextLabel", keyFrame)
@@ -328,6 +328,57 @@ function Library:CreateWindow(Config)
                 state = not state
                 btn.Text = (state and "[x] " or "[ ] ") .. text
                 pcall(callback, state)
+            end)
+        end
+
+        function TabElements:CreateSlider(text, min, max, default, callback)
+            local container = Instance.new("Frame", scrollFrame)
+            container.LayoutOrder = #scrollFrame:GetChildren() * 2
+            container.Size = UDim2.new(1, -10, 0, 45)
+            container.BackgroundTransparency = 1
+
+            local label = Instance.new("TextLabel", container)
+            label.Size = UDim2.new(1, 0, 0, 20)
+            label.BackgroundTransparency = 1
+            label.Font = Enum.Font.Code
+            label.TextColor3 = Color3.new(1,1,1)
+            label.TextXAlignment = Enum.TextXAlignment.Left
+            label.Text = text .. ": " .. tostring(default)
+
+            local sBack = Instance.new("Frame", container)
+            sBack.Size = UDim2.new(1, 0, 0, 6)
+            sBack.Position = UDim2.new(0, 0, 0, 30)
+            sBack.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+            Instance.new("UICorner", sBack)
+
+            local sFill = Instance.new("Frame", sBack)
+            sFill.Size = UDim2.new((default - min)/(max - min), 0, 1, 0)
+            sFill.BackgroundColor3 = Color3.fromRGB(255, 0, 255)
+            Instance.new("UICorner", sFill)
+
+            local sBtn = Instance.new("TextButton", sBack)
+            sBtn.Size = UDim2.new(1, 0, 1, 0)
+            sBtn.BackgroundTransparency = 1
+            sBtn.Text = ""
+            sBtn.SelectionImageObject = EmptySelection
+
+            local function move(input)
+                local pos = math.clamp((input.Position.X - sBack.AbsolutePosition.X) / sBack.AbsoluteSize.X, 0, 1)
+                local val = math.floor(min + (max - min) * pos)
+                sFill.Size = UDim2.new(pos, 0, 1, 0)
+                label.Text = text .. ": " .. tostring(val)
+                pcall(callback, val)
+            end
+
+            local dragging = false
+            sBtn.InputBegan:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true end
+            end)
+            UserInputService.InputEnded:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+            end)
+            UserInputService.InputChanged:Connect(function(input)
+                if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then move(input) end
             end)
         end
 
