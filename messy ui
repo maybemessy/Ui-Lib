@@ -1,9 +1,4 @@
 --// MessyHub UI Library — v5
---// Fixed: minimize bug (sidebar/content now hidden when minimized)
---// New:   SaveConfig/LoadConfig, Watermark, Destroy, SetVisible, SetValue returns,
---//        CreateMultiDropdown, CreateRadioGroup, CreateStepSlider,
---//        CreateConfirmButton, CreateTable, CreateSearchBar, tab search,
---//        loading screen, cursor ring, Window:Destroy()
 
 local Library = {}
 
