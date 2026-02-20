@@ -115,15 +115,25 @@ local function safeRead(path)
     end
 end
 
+-- ── Sanitise a user-supplied config name ─────────────────────────────────────
+-- Strips characters that would be dangerous in a file path, collapses spaces
+-- to underscores, and falls back to a default if the result is empty.
+local function sanitiseConfigName(raw, fallback)
+    local s = tostring(raw or ""):gsub("[^%w%s%-_]", ""):gsub("%s+", "_"):match("^%s*(.-)%s*$")
+    if s == "" then return fallback end
+    return s
+end
+
 -- ─────────────────────────────────────────────────────────────────────────────
 function Library:CreateWindow(Config)
     local hubName      = Config.Name         or "MessyHub"
     local useKeySystem = Config.UseKeySystem
     local keyUrl       = Config.KeyUrl       or "https://pastebin.com/raw/QiV2bNd7"
     local getUrl       = Config.GetUrl       or "https://lootdest.org/s?eKiCaVks"
-    local configFile   = Config.ConfigFile   or (hubName:gsub("%s","_") .. "_config.json")
-    local showLoader   = Config.LoadingScreen ~= false   -- true by default
-    local showCursor   = Config.CursorRing   ~= false    -- true by default
+    -- Default config file name — still used when no custom name is given
+    local defaultConfigName = Config.ConfigFile or (hubName:gsub("%s","_") .. "_config")
+    local showLoader   = Config.LoadingScreen ~= false
+    local showCursor   = Config.CursorRing   ~= false
 
     if Config.AccentColor then
         Theme.Accent     = Config.AccentColor
@@ -153,7 +163,7 @@ function Library:CreateWindow(Config)
     local function conn(c) table.insert(connections, c) end
 
     -- ── Saved state (for SaveConfig/LoadConfig) ───────────────────────────────
-    local savedState = {}   -- key → value, populated per-element
+    local savedState = {}
 
     -- ── Loading Screen ────────────────────────────────────────────────────────
     if showLoader then
@@ -162,7 +172,6 @@ function Library:CreateWindow(Config)
             BackgroundColor3 = Theme.BgMain,
             ZIndex = 999,
         })
-        -- Diamond spinner
         local spinner = Frame(loader, {
             Size = UDim2.new(0,22,0,22),
             Position = UDim2.new(0.5,-11,0.5,-22),
@@ -187,7 +196,6 @@ function Library:CreateWindow(Config)
             TextColor3 = Theme.TextSecondary,
             ZIndex = 1000,
         })
-        -- Spin animation
         local spinConn
         spinConn = RunService.RenderStepped:Connect(function(dt)
             if spinner and spinner.Parent then
@@ -195,7 +203,6 @@ function Library:CreateWindow(Config)
             end
         end)
         conn(spinConn)
-        -- Auto-dismiss after 1.2s
         task.delay(1.2, function()
             T(loader, {BackgroundTransparency = 1}, 0.4)
             task.wait(0.45)
@@ -218,7 +225,6 @@ function Library:CreateWindow(Config)
         })
         Corner(ring, 10)
         Stroke(ring, Theme.Accent, 1.5, 0.3)
-
         conn(RunService.RenderStepped:Connect(function()
             local mp = UserInputService:GetMouseLocation()
             cursorRing.Position = UDim2.new(0, mp.X - 10, 0, mp.Y - 10)
@@ -266,7 +272,7 @@ function Library:CreateWindow(Config)
         _activeTabName = nil,
         _accentColor = Theme.Accent,
         _watermark   = nil,
-        _allElements = {},  -- {id, getValue, setValue} for config
+        _allElements = {},
     }
 
     function Window:GetTheme() return self._accentColor end
@@ -304,15 +310,12 @@ function Library:CreateWindow(Config)
             TextXAlignment = Enum.TextXAlignment.Left,
             ZIndex = 91,
         })
-        -- auto-size
         task.defer(function()
             if lbl and lbl.Parent then
                 wm.Size = UDim2.new(0, lbl.TextBounds.X + 16, 0, 24)
             end
         end)
         self._watermark = wm
-
-        -- live FPS update in watermark if text contains {fps}
         if text:find("{fps}") then
             local fc2, lt2 = 0, os.clock()
             conn(RunService.RenderStepped:Connect(function()
@@ -327,13 +330,19 @@ function Library:CreateWindow(Config)
     end
 
     -- ── SaveConfig / LoadConfig ───────────────────────────────────────────────
-    function Window:SaveConfig()
+    -- Both now accept an optional customName string.
+    -- If provided (and non-empty after sanitisation) it overrides the default
+    -- config file name set in CreateWindow.  The ".json" extension is always
+    -- appended automatically so the user doesn't have to type it.
+    function Window:SaveConfig(customName)
+        local baseName = sanitiseConfigName(customName, defaultConfigName)
+        local filePath = baseName .. ".json"
+
         local t = {}
         for _, e in ipairs(self._allElements) do
             t[e.id] = e.getValue()
         end
         local ok, encoded = pcall(function()
-            -- simple JSON encode (handles string/number/boolean/nil)
             local parts = {}
             for k, v in pairs(t) do
                 local val
@@ -354,20 +363,22 @@ function Library:CreateWindow(Config)
             return "{" .. table.concat(parts, ",") .. "}"
         end)
         if ok then
-            safeWrite(configFile, encoded)
-            self:Notify("Config", "Saved to " .. configFile, 2, "success")
+            safeWrite(filePath, encoded)
+            self:Notify("Config", "Saved as " .. filePath, 2, "success")
         else
             self:Notify("Config", "Save failed.", 2, "error")
         end
     end
 
-    function Window:LoadConfig()
-        local raw = safeRead(configFile)
+    function Window:LoadConfig(customName)
+        local baseName = sanitiseConfigName(customName, defaultConfigName)
+        local filePath = baseName .. ".json"
+
+        local raw = safeRead(filePath)
         if not raw then
-            self:Notify("Config", "No saved config found.", 2, "warning")
+            self:Notify("Config", "No config found: " .. filePath, 2, "warning")
             return
         end
-        -- Very small JSON parser for our simple format
         local parsed = {}
         for k, v in raw:gmatch('"([^"]+)"%s*:%s*([^,}]+)') do
             if v:sub(1,1) == '"' then
@@ -389,7 +400,57 @@ function Library:CreateWindow(Config)
                 pcall(e.setValue, parsed[e.id])
             end
         end
-        self:Notify("Config", "Config loaded!", 2, "success")
+        self:Notify("Config", "Loaded: " .. filePath, 2, "success")
+    end
+
+    -- ── CreateConfigTab (new convenience method) ──────────────────────────────
+    -- Call Window:CreateConfigTab() after creating your other tabs.
+    -- It builds a ready-made "Config" tab with a name input box and
+    -- Save / Load / Reset buttons.  You can still call SaveConfig/LoadConfig
+    -- programmatically from anywhere — this is just the UI wrapper.
+    function Window:CreateConfigTab(tabName)
+        tabName = tabName or "Config"
+        local Tab = self:CreateTab(tabName, "C")
+
+        Tab:CreateLabel("Give your config a name, then save or load it.")
+        Tab:CreateDivider("Config File")
+
+        -- Name input — stores the last typed name so buttons can read it
+        local currentName = defaultConfigName
+        local nameInput = Tab:CreateInput(
+            "Config name (e.g. my_settings)",
+            defaultConfigName,
+            function(text)
+                local s = sanitiseConfigName(text, defaultConfigName)
+                currentName = s
+            end
+        )
+
+        -- Live sanitise-preview label so the user sees the actual filename
+        local previewHolder = Frame(nil, { BackgroundTransparency = 1 })  -- created inside the tab scroll below
+        -- We piggyback on a plain CreateLabel; update it after the input changes
+        -- by rebuilding each time.  Simpler: just show it once via a label that
+        -- reads from a shared upvalue on button press.
+
+        Tab:CreateDivider("Actions")
+
+        Tab:CreateButton("💾  Save Config", function()
+            self:SaveConfig(currentName)
+        end, "Save all current settings to a named file")
+
+        Tab:CreateButton("📂  Load Config", function()
+            self:LoadConfig(currentName)
+        end, "Load settings from the named file")
+
+        Tab:CreateDivider("Danger Zone")
+
+        Tab:CreateConfirmButton("🗑️  Reset to Defaults", function()
+            -- Zero-out / default all registered elements by reloading nothing —
+            -- users can extend this per-project.  For now we just notify.
+            self:Notify("Config", "Reset triggered — implement per-project defaults.", 3, "warning")
+        end)
+
+        return Tab
     end
 
     -- ── Notify ────────────────────────────────────────────────────────────────
@@ -467,7 +528,6 @@ function Library:CreateWindow(Config)
         T(pbg,     {BackgroundTransparency = 0.5},  0.25)
         T(pf,      {Size = UDim2.new(0,0,1,0)},    duration, Enum.EasingStyle.Linear)
 
-        -- Click to dismiss
         local dc; dc = n.InputBegan:Connect(function(inp)
             if inp.UserInputType == Enum.UserInputType.MouseButton1 then
                 dc:Disconnect()
@@ -491,7 +551,6 @@ function Library:CreateWindow(Config)
         BackgroundColor3 = Color3.fromRGB(13,13,16),
     })
 
-    -- Diamond icon (Frame-based, no glyph)
     local iconOuter = Frame(titleBar, {
         Size = UDim2.new(0,14,0,14),
         Position = UDim2.new(0,10,0.5,-7),
@@ -515,7 +574,6 @@ function Library:CreateWindow(Config)
         TextXAlignment = Enum.TextXAlignment.Left,
     })
 
-    -- Gradient separator line
     local sep = Frame(titleBar, {
         Size = UDim2.new(1,0,0,1),
         Position = UDim2.new(0,0,1,-1),
@@ -529,7 +587,6 @@ function Library:CreateWindow(Config)
         ColorSequenceKeypoint.new(1,    Color3.new(0,0,0)),
     })
 
-    -- FPS (throttled: only updates titlebar text once/sec via RenderStepped counter)
     local fc, lt = 0, os.clock()
     conn(RunService.RenderStepped:Connect(function()
         fc += 1
@@ -539,7 +596,6 @@ function Library:CreateWindow(Config)
         end
     end))
 
-    -- Title buttons factory
     local function TitleBtn(xOff, txt, hCol)
         local b = Btn(titleBar, {
             Size = UDim2.new(0,22,0,22),
@@ -558,12 +614,9 @@ function Library:CreateWindow(Config)
     local closeBtn = TitleBtn(-28, "X", Theme.Danger)
     closeBtn.MouseButton1Click:Connect(function() Window:Destroy() end)
 
-    -- ── MINIMIZE FIX: hide sidebar + content, only show titleBar ─────────────
     local isMin = false
     local minBtn = TitleBtn(-54, "-", Color3.fromRGB(55,55,75))
-
-    -- sidebar and contentArea declared below, referenced via upvalue
-    local sidebar, contentArea  -- forward-declare
+    local sidebar, contentArea
 
     minBtn.MouseButton1Click:Connect(function()
         isMin = not isMin
@@ -593,7 +646,6 @@ function Library:CreateWindow(Config)
     })
     sideG.Rotation = 90
 
-    -- Right divider with gradient
     local divLine = Frame(sidebar, {
         Size = UDim2.new(0,1,1,0),
         Position = UDim2.new(1,0,0,0),
@@ -609,7 +661,6 @@ function Library:CreateWindow(Config)
     })
     divG.Rotation = 90
 
-    -- ── Tab Search box at top of sidebar ─────────────────────────────────────
     local tabSearchBox = Box(sidebar, {
         Size = UDim2.new(1,-10,0,24),
         Position = UDim2.new(0,5,0,5),
@@ -623,7 +674,6 @@ function Library:CreateWindow(Config)
     local tabSearchPad = Instance.new("UIPadding", tabSearchBox)
     tabSearchPad.PaddingLeft = UDim.new(0,6)
 
-    -- Tab list (starts below search box)
     local tabListHolder = Frame(sidebar, {
         Size = UDim2.new(1,0,1,-58),
         Position = UDim2.new(0,0,0,34),
@@ -637,7 +687,6 @@ function Library:CreateWindow(Config)
     tabPad.PaddingRight = UDim.new(0,5)
     tabPad.PaddingTop   = UDim.new(0,3)
 
-    -- Footer
     Label(sidebar, {
         Size = UDim2.new(1,0,0,20),
         Position = UDim2.new(0,0,1,-22),
@@ -701,7 +750,6 @@ function Library:CreateWindow(Config)
         lockBtn.Text = isLocked and "Unlock" or "Lock"
     end)
 
-    -- Tab search filter
     tabSearchBox:GetPropertyChangedSignal("Text"):Connect(function()
         local q = tabSearchBox.Text:lower()
         for _, child in ipairs(tabListHolder:GetChildren()) do
@@ -865,7 +913,6 @@ function Library:CreateWindow(Config)
         Window._tabs[name] = selectTab
         if not Window._activeTab then task.defer(selectTab) end
 
-        -- ── Per-tab helpers ───────────────────────────────────────────────────
         local order = 0
         local function nxt() order += 1; return order end
 
@@ -879,7 +926,6 @@ function Library:CreateWindow(Config)
             return f
         end
 
-        -- helper: register element for config save/load
         local elemCount = 0
         local function regElem(id, getV, setV)
             elemCount += 1
@@ -896,7 +942,6 @@ function Library:CreateWindow(Config)
                 Size = UDim2.new(1,0,0,22),
                 BackgroundTransparency = 1,
             })
-            -- Full-width line
             Frame(w, {
                 Size = UDim2.new(1,0,0,1),
                 Position = UDim2.new(0,0,0.5,0),
@@ -918,7 +963,6 @@ function Library:CreateWindow(Config)
                     Font = Enum.Font.GothamBold,
                     TextColor3 = Theme.TextSecondary,
                 })
-                -- auto-width the pill
                 task.defer(function()
                     if lbl and lbl.Parent then
                         pill.Size = UDim2.new(0, lbl.TextBounds.X + 16, 0, 16)
@@ -1134,7 +1178,6 @@ function Library:CreateWindow(Config)
 
         -- ── Step Slider ───────────────────────────────────────────────────────
         function TabElements:CreateStepSlider(labelText, steps, defIdx, callback)
-            -- steps = {"1x","2x","4x","8x"}, defIdx = 1-based index
             defIdx = math.clamp(defIdx or 1, 1, #steps)
             local f = ElemFrame(50); f.Size=UDim2.new(1,0,0,50)
             local valLbl = Label(f,{Size=UDim2.new(1,-10,0,22),Position=UDim2.new(0,10,0,4),Text=labelText.." :  "..tostring(steps[defIdx]),TextXAlignment=Enum.TextXAlignment.Left})
@@ -1224,13 +1267,8 @@ function Library:CreateWindow(Config)
 
         -- ── Multi-Dropdown ────────────────────────────────────────────────────
         function TabElements:CreateMultiDropdown(labelText, options, callback)
-            -- BUG FIX: use nil to mean "not selected" instead of false.
-            -- `not false` == true, which caused deselected items to re-select on
-            -- the next click. Now we set selected[opt] = true on select and
-            -- selected[opt] = nil on deselect so getCount and all visual checks
-            -- work correctly.
             local selected = {}
-            local rowRefs  = {}   -- opt -> {row, chk, chkMark}  for SetValue
+            local rowRefs  = {}
 
             local function getCount()
                 local n = 0
@@ -1301,7 +1339,7 @@ function Library:CreateWindow(Config)
             local isOpen = false
 
             for _, opt in ipairs(options) do
-                local isSelected = false   -- local shadow for this row
+                local isSelected = false
 
                 local row = Btn(os3, {
                     Size = UDim2.new(1,0,0,30),
@@ -1310,7 +1348,6 @@ function Library:CreateWindow(Config)
                 })
                 Corner(row, 6)
 
-                -- Checkbox box
                 local chk = Frame(row, {
                     Size = UDim2.new(0,16,0,16),
                     Position = UDim2.new(0,8,0.5,-8),
@@ -1319,7 +1356,6 @@ function Library:CreateWindow(Config)
                 Corner(chk, 4)
                 Stroke(chk, Theme.Accent, 1, 0.6)
 
-                -- Checkmark (visible when selected)
                 local chkMark = Label(chk, {
                     Size = UDim2.new(1,0,1,0),
                     Text = "",
@@ -1339,20 +1375,16 @@ function Library:CreateWindow(Config)
 
                 rowRefs[opt] = {row=row, chk=chk, chkMark=chkMark}
 
-                -- Shared visual update for this row
                 local function applyRowState(on)
                     isSelected = on
                     if on then
                         selected[opt] = true
                     else
-                        selected[opt] = nil   -- nil = not in table, getCount correct
+                        selected[opt] = nil
                     end
-                    -- Checkbox fill
                     chkMark.Text = on and "v" or ""
                     T(chk,  {BackgroundColor3 = on and Theme.Accent or Theme.BgElement2}, 0.12)
-                    -- Row background
                     T(row,  {BackgroundColor3 = on and Color3.fromRGB(38,10,58) or Theme.BgElement}, 0.12)
-                    -- Badge count
                     local c = getCount()
                     bCount.Text = tostring(c)
                     T(badge, {BackgroundColor3 = c > 0 and Theme.Accent or Theme.AccentDark}, 0.12)
@@ -1362,12 +1394,11 @@ function Library:CreateWindow(Config)
                     if not isSelected then T(row, {BackgroundColor3 = Theme.AccentDark}, 0.1) end
                 end)
                 row.MouseLeave:Connect(function()
-                    -- read isSelected (local), NOT selected[opt] which may be nil
                     T(row, {BackgroundColor3 = isSelected and Color3.fromRGB(38,10,58) or Theme.BgElement}, 0.1)
                 end)
 
                 row.MouseButton1Click:Connect(function()
-                    applyRowState(not isSelected)   -- toggle using local shadow
+                    applyRowState(not isSelected)
                     pcall(callback, getList())
                 end)
             end
@@ -1386,17 +1417,14 @@ function Library:CreateWindow(Config)
                 end
             end)
 
-            -- Return object with SetValue (accepts array of strings)
             local MDObj = {}
             function MDObj:SetValue(arr)
-                -- clear all first
                 for opt2, ref in pairs(rowRefs) do
                     selected[opt2] = nil
                     ref.chkMark.Text = ""
                     ref.chk.BackgroundColor3 = Theme.BgElement2
                     ref.row.BackgroundColor3 = Theme.BgElement
                 end
-                -- apply new
                 if type(arr) == "table" then
                     for _, v in ipairs(arr) do
                         if rowRefs[v] then
@@ -1531,8 +1559,6 @@ function Library:CreateWindow(Config)
             local totalH = rowH + #rows * rowH + 4
             local f = ElemFrame(totalH); f.Size=UDim2.new(1,0,0,totalH)
             local colW = 1/#headers
-
-            -- Header row
             local hRow=Frame(f,{Size=UDim2.new(1,0,0,rowH),BackgroundColor3=Theme.AccentDark})
             Corner(hRow,6)
             for i,h in ipairs(headers) do
@@ -1543,8 +1569,6 @@ function Library:CreateWindow(Config)
                     TextColor3=Color3.new(1,1,1),
                 })
             end
-
-            -- Data rows
             for ri, row in ipairs(rows) do
                 local bg = ri%2==0 and Theme.BgElement2 or Theme.BgElement
                 local rRow=Frame(f,{
@@ -1560,7 +1584,6 @@ function Library:CreateWindow(Config)
                         TextColor3=Theme.TextSecondary,
                     })
                 end
-                -- Hover highlight
                 local hit=Btn(rRow,{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text=""})
                 hit.MouseEnter:Connect(function() T(rRow,{BackgroundColor3=Theme.AccentDark},0.1) end)
                 hit.MouseLeave:Connect(function() T(rRow,{BackgroundColor3=bg},0.1) end)
