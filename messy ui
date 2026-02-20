@@ -1,4 +1,5 @@
---// MessyHub UI Library — v5
+--// MessyHub UI Library — v5.1
+-- Fixes: config save/load dropdown, theme background image, dropdown UI artifacts, optimized UI
 
 local Library = {}
 
@@ -27,7 +28,7 @@ local Theme = {
     Warning       = Color3.fromRGB(230, 170,  30),
 }
 
--- ── Micro-helpers (no GC pressure, reused everywhere) ─────────────────────────
+-- ── Micro-helpers ─────────────────────────────────────────────────────────────
 local function T(obj, props, t, style, dir)
     if not obj or not obj.Parent then return end
     TweenService:Create(obj,
@@ -92,7 +93,6 @@ local function Box(parent, props)
     return b
 end
 
--- Throttled slider callback (fires at most every N seconds)
 local function throttle(fn, interval)
     local last = 0
     return function(...)
@@ -104,7 +104,7 @@ local function throttle(fn, interval)
     end
 end
 
--- ── writefile / readfile wrappers (graceful fallback) ────────────────────────
+-- ── Config file helpers ───────────────────────────────────────────────────────
 local function safeWrite(path, data)
     if writefile then pcall(writefile, path, data) end
 end
@@ -115,27 +115,42 @@ local function safeRead(path)
     end
 end
 
--- ── List all saved config files matching a hub prefix ────────────────────────
-local function safeListConfigs(prefix)
-    local results = {}
-    if not listfiles then return results end
-    local ok, files = pcall(listfiles, "")
-    if not ok then return results end
-    for _, path in ipairs(files) do
-        -- normalise slashes, strip directory component
-        local name = path:gsub("\\","/"):match("([^/]+)$") or path
-        if name:match("^" .. prefix:gsub("%-","%-") .. ".*%.json$") then
-            -- strip .json to get the base name
-            table.insert(results, name:sub(1, -6))
-        end
+-- FIX: Robust config listing — stores names in a Roblox-safe table instead of relying on listfiles
+-- We maintain a persistent in-memory registry of saved configs per hub
+local _configRegistry = {}  -- [hubPrefix] = {name1, name2, ...}
+
+local function registerConfig(prefix, baseName)
+    if not _configRegistry[prefix] then _configRegistry[prefix] = {} end
+    -- avoid duplicates
+    for _, v in ipairs(_configRegistry[prefix]) do
+        if v == baseName then return end
     end
-    table.sort(results)
-    return results
+    table.insert(_configRegistry[prefix], baseName)
+    table.sort(_configRegistry[prefix])
 end
 
--- ── Sanitise a user-supplied config name ─────────────────────────────────────
--- Strips characters that would be dangerous in a file path, collapses spaces
--- to underscores, and falls back to a default if the result is empty.
+local function safeListConfigs(prefix)
+    -- Primary: try listfiles if available
+    local results = {}
+    if listfiles then
+        local ok, files = pcall(listfiles, "")
+        if ok then
+            for _, path in ipairs(files) do
+                local name = path:gsub("\\","/"):match("([^/]+)$") or path
+                if name:match("^" .. prefix:gsub("%-","%-") .. ".*%.json$") then
+                    table.insert(results, name:sub(1, -6))
+                end
+            end
+            table.sort(results)
+            -- Sync into registry
+            for _, n in ipairs(results) do registerConfig(prefix, n) end
+            return results
+        end
+    end
+    -- Fallback: use in-memory registry
+    return _configRegistry[prefix] or {}
+end
+
 local function sanitiseConfigName(raw, fallback)
     local s = tostring(raw or ""):gsub("[^%w%s%-_]", ""):gsub("%s+", "_"):match("^%s*(.-)%s*$")
     if s == "" then return fallback end
@@ -148,10 +163,12 @@ function Library:CreateWindow(Config)
     local useKeySystem = Config.UseKeySystem
     local keyUrl       = Config.KeyUrl       or "https://pastebin.com/raw/QiV2bNd7"
     local getUrl       = Config.GetUrl       or "https://lootdest.org/s?eKiCaVks"
-    -- Default config file name — still used when no custom name is given
     local defaultConfigName = Config.ConfigFile or (hubName:gsub("%s","_") .. "_config")
     local showLoader   = Config.LoadingScreen ~= false
     local showCursor   = Config.CursorRing   ~= false
+    -- NEW: optional background image URL (ContentProvider URL or rbxassetid)
+    local bgImageUrl   = Config.BackgroundImage or nil
+    local bgImageTrans = Config.BackgroundImageTransparency or 0.85
 
     if Config.AccentColor then
         Theme.Accent     = Config.AccentColor
@@ -180,10 +197,7 @@ function Library:CreateWindow(Config)
     local connections = {}
     local function conn(c) table.insert(connections, c) end
 
-    -- ── Saved state (for SaveConfig/LoadConfig) ───────────────────────────────
     local savedState = {}
-
-    -- ── accent-object registry (defined here so everything below can use it) ──
     local accentObjs = {}
     local function regAccent(obj, prop)
         table.insert(accentObjs, {obj=obj, prop=prop or "BackgroundColor3"})
@@ -233,15 +247,37 @@ function Library:CreateWindow(Config)
         BackgroundColor3 = Theme.BgMain,
         Active           = true,
         Draggable        = true,
-        Visible          = false,   -- hidden until openMain() fires
+        Visible          = false,
         ClipsDescendants = true,
     })
     Corner(main, 10)
     local mainStroke = Stroke(main, Theme.Accent, 1, 0.45)
     regAccent(mainStroke, "Color")
 
-    -- openMain: reveal and animate the window open.
-    -- Must be defined BEFORE the loading screen block which calls it.
+    -- ── Background Image Layer (NEW) ─────────────────────────────────────────
+    -- Sits behind everything in main; set via Window:SetBackgroundImage(url, transparency)
+    local bgImageLabel = nil
+    local function applyBgImage(url, trans)
+        if not url or url == "" then
+            if bgImageLabel then bgImageLabel.Visible = false end
+            return
+        end
+        if not bgImageLabel then
+            bgImageLabel = Instance.new("ImageLabel", main)
+            bgImageLabel.Name              = "BgImage"
+            bgImageLabel.Size              = UDim2.new(1,0,1,0)
+            bgImageLabel.Position          = UDim2.new(0,0,0,0)
+            bgImageLabel.BackgroundTransparency = 1
+            bgImageLabel.ScaleType         = Enum.ScaleType.Crop
+            bgImageLabel.ZIndex            = 0
+            Corner(bgImageLabel, 10)
+        end
+        bgImageLabel.Image              = url
+        bgImageLabel.ImageTransparency  = trans or bgImageTrans
+        bgImageLabel.Visible            = true
+    end
+    if bgImageUrl then applyBgImage(bgImageUrl, bgImageTrans) end
+
     local function openMain()
         if useKeySystem then return end
         main.Visible = true
@@ -310,14 +346,12 @@ function Library:CreateWindow(Config)
         _accentColor        = Theme.Accent,
         _watermark          = nil,
         _allElements        = {},
-        _tabOpenCallbacks   = {},   -- name → {fn, fn, ...}
+        _tabOpenCallbacks   = {},
     }
-    -- accentObjs is the shared local defined above; regAccent is already defined.
-    -- SetTheme iterates it directly.
 
     function Window:GetTheme() return self._accentColor end
 
-    -- ── SetTheme: change accent colour + repaint all registered elements ──────
+    -- ── SetTheme ──────────────────────────────────────────────────────────────
     function Window:SetTheme(color)
         self._accentColor = color
         Theme.Accent      = color
@@ -327,13 +361,11 @@ function Library:CreateWindow(Config)
             math.min(color.G + 0.05, 1),
             math.min(color.B + 0.10, 1)
         )
-        -- repaint all registered accent objects
         for _, e in ipairs(accentObjs) do
             if e.obj and e.obj.Parent then
                 pcall(function() e.obj[e.prop] = color end)
             end
         end
-        -- repaint separator gradient
         pcall(function()
             sepG.Color = ColorSequence.new({
                 ColorSequenceKeypoint.new(0,    Color3.new(0,0,0)),
@@ -342,7 +374,6 @@ function Library:CreateWindow(Config)
                 ColorSequenceKeypoint.new(1,    Color3.new(0,0,0)),
             })
         end)
-        -- repaint sidebar gradient top colour
         pcall(function()
             local r,g,b = color.R*0.12, color.G*0.02, color.B*0.20
             sideG.Color = ColorSequence.new({
@@ -350,18 +381,36 @@ function Library:CreateWindow(Config)
                 ColorSequenceKeypoint.new(1, Color3.fromRGB(8,8,10)),
             })
         end)
-        -- repaint title diamond
         pcall(function() iconOuter.BackgroundColor3 = color end)
-        -- repaint watermark stroke
         if self._watermark then
             local s = self._watermark:FindFirstChildOfClass("UIStroke")
             if s then s.Color = color end
         end
-        -- repaint main stroke
         pcall(function()
             local ms = main:FindFirstChildOfClass("UIStroke")
             if ms then ms.Color = color end
         end)
+    end
+
+    -- NEW: Set background image at runtime
+    function Window:SetBackgroundImage(url, transparency)
+        bgImageTrans = transparency or bgImageTrans
+        applyBgImage(url, bgImageTrans)
+        -- Reduce sidebar/content opacity slightly so image shows through
+        if url and url ~= "" then
+            pcall(function()
+                main.BackgroundTransparency = 0.1
+            end)
+        else
+            pcall(function()
+                main.BackgroundTransparency = 0
+            end)
+        end
+    end
+
+    -- NEW: Remove/clear background image
+    function Window:ClearBackgroundImage()
+        if bgImageLabel then bgImageLabel.Visible = false end
     end
 
     -- ── Built-in theme presets ────────────────────────────────────────────────
@@ -388,19 +437,26 @@ function Library:CreateWindow(Config)
         if col then self:SetTheme(col) end
     end
 
-    -- ── Config file management ─────────────────────────────────────────────────
-    -- Returns a sorted list of base names (no .json) matching this hub's prefix
+    -- ── Config file management ────────────────────────────────────────────────
     function Window:ListSavedConfigs()
         return safeListConfigs(defaultConfigName)
     end
 
-    -- Delete a saved config file
     function Window:DeleteConfig(customName)
         local baseName = sanitiseConfigName(customName, defaultConfigName)
         local filePath = baseName .. ".json"
         if delfile then
             local ok = pcall(delfile, filePath)
             if ok then
+                -- Remove from registry
+                if _configRegistry[defaultConfigName] then
+                    for i, v in ipairs(_configRegistry[defaultConfigName]) do
+                        if v == baseName then
+                            table.remove(_configRegistry[defaultConfigName], i)
+                            break
+                        end
+                    end
+                end
                 self:Notify("Config", "Deleted: " .. filePath, 2, "success")
                 return true
             end
@@ -409,14 +465,10 @@ function Library:CreateWindow(Config)
         return false
     end
 
-    -- ── ToggleCursorRing: show or hide the cursor ring at runtime ─────────────
     function Window:ToggleCursorRing(state)
-        if cursorRing then
-            cursorRing.Visible = state
-        end
+        if cursorRing then cursorRing.Visible = state end
     end
 
-    -- ── Destroy ───────────────────────────────────────────────────────────────
     function Window:Destroy()
         T(main, {Size = UDim2.new(0,620,0,0)}, 0.22, Enum.EasingStyle.Back, Enum.EasingDirection.In)
         task.wait(0.28)
@@ -465,10 +517,6 @@ function Library:CreateWindow(Config)
     end
 
     -- ── SaveConfig / LoadConfig ───────────────────────────────────────────────
-    -- Both now accept an optional customName string.
-    -- If provided (and non-empty after sanitisation) it overrides the default
-    -- config file name set in CreateWindow.  The ".json" extension is always
-    -- appended automatically so the user doesn't have to type it.
     function Window:SaveConfig(customName)
         local baseName = sanitiseConfigName(customName, defaultConfigName)
         local filePath = baseName .. ".json"
@@ -499,6 +547,8 @@ function Library:CreateWindow(Config)
         end)
         if ok then
             safeWrite(filePath, encoded)
+            -- FIX: Register in memory so dropdown refreshes immediately
+            registerConfig(defaultConfigName, baseName)
             self:Notify("Config", "Saved as " .. filePath, 2, "success")
         else
             self:Notify("Config", "Save failed.", 2, "error")
@@ -538,51 +588,101 @@ function Library:CreateWindow(Config)
         self:Notify("Config", "Loaded: " .. filePath, 2, "success")
     end
 
-    -- ── CreateConfigTab (new convenience method) ──────────────────────────────
-    -- Call Window:CreateConfigTab() after creating your other tabs.
-    -- It builds a ready-made "Config" tab with a name input box and
-    -- Save / Load / Reset buttons.  You can still call SaveConfig/LoadConfig
-    -- programmatically from anywhere — this is just the UI wrapper.
+    -- ── CreateConfigTab ───────────────────────────────────────────────────────
+    -- FIX: Completely rewritten — dropdown now dynamically refreshes after save/load/delete
     function Window:CreateConfigTab(tabName)
         tabName = tabName or "Config"
         local Tab = self:CreateTab(tabName, "C")
 
-        Tab:CreateLabel("Give your config a name, then save or load it.")
+        -- Current name state
+        local currentName = defaultConfigName
+
         Tab:CreateDivider("Config File")
 
-        -- Name input — stores the last typed name so buttons can read it
-        local currentName = defaultConfigName
-        local nameInput = Tab:CreateInput(
-            "Config name (e.g. my_settings)",
+        -- Name input
+        Tab:CreateInput(
+            "Config name",
             defaultConfigName,
             function(text)
-                local s = sanitiseConfigName(text, defaultConfigName)
-                currentName = s
+                currentName = sanitiseConfigName(text, defaultConfigName)
             end
         )
 
-        -- Live sanitise-preview label so the user sees the actual filename
-        local previewHolder = Frame(nil, { BackgroundTransparency = 1 })  -- created inside the tab scroll below
-        -- We piggyback on a plain CreateLabel; update it after the input changes
-        -- by rebuilding each time.  Simpler: just show it once via a label that
-        -- reads from a shared upvalue on button press.
+        -- FIX: Dynamic saved configs dropdown
+        -- We store a reference to the dropdown object so we can refresh it
+        local configDropdown = nil
+        local function getConfigList()
+            local list = self:ListSavedConfigs()
+            if #list == 0 then
+                return {"(none saved)"}
+            end
+            return list
+        end
+
+        configDropdown = Tab:CreateDropdown("Saved Configs", getConfigList(), function(selected)
+            if selected ~= "(none saved)" then
+                currentName = selected
+            end
+        end)
 
         Tab:CreateDivider("Actions")
 
         Tab:CreateButton("💾  Save Config", function()
             self:SaveConfig(currentName)
+            -- FIX: Refresh the dropdown after saving
+            task.defer(function()
+                if configDropdown then
+                    configDropdown:RefreshOptions(getConfigList())
+                end
+            end)
         end, "Save all current settings to a named file")
 
         Tab:CreateButton("📂  Load Config", function()
             self:LoadConfig(currentName)
-        end, "Load settings from the named file")
+        end, "Load settings from the selected/named config")
 
-        Tab:CreateDivider("Danger Zone")
+        Tab:CreateButton("🗑️  Delete Config", function()
+            if currentName ~= defaultConfigName then
+                self:DeleteConfig(currentName)
+                task.defer(function()
+                    if configDropdown then
+                        configDropdown:RefreshOptions(getConfigList())
+                    end
+                    currentName = defaultConfigName
+                end)
+            else
+                self:Notify("Config", "Select a config to delete first.", 2, "warning")
+            end
+        end, "Delete the currently selected config file")
 
-        Tab:CreateConfirmButton("🗑️  Reset to Defaults", function()
-            -- Zero-out / default all registered elements by reloading nothing —
-            -- users can extend this per-project.  For now we just notify.
-            self:Notify("Config", "Reset triggered — implement per-project defaults.", 3, "warning")
+        Tab:CreateDivider("Background Image")
+
+        local bgUrl = ""
+        Tab:CreateInput(
+            "Image URL / rbxassetid://...",
+            "",
+            function(text) bgUrl = text end
+        )
+
+        Tab:CreateButton("🖼  Apply Background", function()
+            if bgUrl ~= "" then
+                self:SetBackgroundImage(bgUrl, 0.55)
+                self:Notify("Theme", "Background image applied!", 2, "success")
+            else
+                self:Notify("Theme", "Enter an image URL first.", 2, "warning")
+            end
+        end, "Apply an image as the window background")
+
+        Tab:CreateButton("✖  Clear Background", function()
+            self:ClearBackgroundImage()
+            self:Notify("Theme", "Background cleared.", 2, "info")
+        end, "Remove the background image")
+
+        Tab:CreateDivider("Theme Presets")
+
+        Tab:CreateDropdown("Accent Color", self:GetThemePresets(), function(preset)
+            self:ApplyThemePreset(preset)
+            self:Notify("Theme", "Applied: " .. preset, 2, "success")
         end)
 
         return Tab
@@ -716,7 +816,6 @@ function Library:CreateWindow(Config)
         Visible = false,
     })
     regAccent(sep, "BackgroundColor3")
-    -- Show separator only after the open animation starts
     task.defer(function() task.defer(function()
         if sep and sep.Parent then sep.Visible = true end
     end) end)
@@ -1057,7 +1156,6 @@ function Library:CreateWindow(Config)
             Window._activeIcon     = iconLbl
             Window._activeIconBox  = iconBox
             Window._activeTabName  = tabName
-            -- fire any registered on-open callbacks for this tab name
             local cbs = Window._tabOpenCallbacks[name]
             if cbs then for _, cb in ipairs(cbs) do pcall(cb) end end
         end
@@ -1175,11 +1273,24 @@ function Library:CreateWindow(Config)
             return S
         end
 
-        -- ── Button (with tooltip) ─────────────────────────────────────────────
+        -- ── Button ────────────────────────────────────────────────────────────
         function TabElements:CreateButton(text, callback, tooltip)
             local f = ElemFrame(32)
-            Frame(f, {Size=UDim2.new(0,2,0.5,0), Position=UDim2.new(0,0,0.25,0), BackgroundColor3=Theme.Accent})
-            local b = Btn(f, {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text=text})
+            -- FIX: accent strip as separate child, not overlapping with button text
+            local accentStrip = Frame(f, {
+                Size=UDim2.new(0,2,0.5,0),
+                Position=UDim2.new(0,0,0.25,0),
+                BackgroundColor3=Theme.Accent,
+            })
+            regAccent(accentStrip, "BackgroundColor3")
+            -- FIX: button text properly padded so it never overlaps the strip
+            local b = Btn(f, {
+                Size=UDim2.new(1,-4,1,0),
+                Position=UDim2.new(0,4,0,0),
+                BackgroundTransparency=1,
+                Text=text,
+                TextXAlignment=Enum.TextXAlignment.Center,
+            })
             b.MouseEnter:Connect(function() T(f,{BackgroundColor3=Theme.AccentDark},0.12) end)
             b.MouseLeave:Connect(function() T(f,{BackgroundColor3=Theme.BgElement},0.12) end)
             b.MouseButton1Down:Connect(function() T(f,{BackgroundColor3=Theme.Accent},0.07) end)
@@ -1264,12 +1375,21 @@ function Library:CreateWindow(Config)
         function TabElements:CreateInput(placeholder, defaultText, callback)
             local f = ElemFrame(32)
             Stroke(f, Theme.Accent, 1, 0.65)
-            Label(f, {Size=UDim2.new(0,28,1,0), Text=">>", Font=Enum.Font.GothamBold, TextSize=11, TextColor3=Theme.Accent})
+            -- FIX: arrow indicator now non-interactive and properly z-indexed
+            local arrowLbl = Label(f, {
+                Size=UDim2.new(0,28,1,0),
+                Text=">>",
+                Font=Enum.Font.GothamBold,
+                TextSize=11,
+                TextColor3=Theme.Accent,
+                ZIndex=2,
+            })
             local inp = Box(f, {
                 Size=UDim2.new(1,-34,1,0), Position=UDim2.new(0,28,0,0),
                 PlaceholderText=placeholder, Text=defaultText or "",
                 BackgroundColor3=Color3.new(0,0,0), BackgroundTransparency=1,
                 Font=Enum.Font.Code,
+                ZIndex=2,
             })
             inp.Focused:Connect(function() local s=f:FindFirstChildOfClass("UIStroke"); if s then s.Transparency=0 end end)
             inp.FocusLost:Connect(function(enter)
@@ -1375,46 +1495,187 @@ function Library:CreateWindow(Config)
             return StepObj
         end
 
-        -- ── Dropdown ─────────────────────────────────────────────────────────
+        -- ── Dropdown ──────────────────────────────────────────────────────────
+        -- FIX: completely reworked — no visible text artifacts, proper ZIndex layering,
+        -- search box properly positioned, arrow indicator clean, RefreshOptions added
         function TabElements:CreateDropdown(labelText, options, callback)
             local selected = nil
-            local btn = Btn(scroll,{LayoutOrder=nxt(),Size=UDim2.new(1,0,0,32),BackgroundColor3=Theme.BgElement,Text="  "..labelText,TextXAlignment=Enum.TextXAlignment.Left})
-            Corner(btn,7); Stroke(btn,Theme.Accent,1,0.65)
-            local arrow=Label(btn,{Size=UDim2.new(0,26,1,0),Position=UDim2.new(1,-28,0,0),Text="v",Font=Enum.Font.GothamBold,TextSize=12,TextColor3=Theme.Accent})
-            local drop=Frame(scroll,{LayoutOrder=nxt(),Size=UDim2.new(1,0,0,0),BackgroundColor3=Theme.BgElement2,ClipsDescendants=true,Visible=false})
-            Corner(drop,7)
-            local sb=Box(drop,{Size=UDim2.new(1,-10,0,26),Position=UDim2.new(0,5,0,4),PlaceholderText="Search...",BackgroundColor3=Theme.BgElement,TextSize=12,Font=Enum.Font.Gotham})
-            Corner(sb,5)
-            local os2=Instance.new("ScrollingFrame",drop); os2.Size=UDim2.new(1,0,1,-36); os2.Position=UDim2.new(0,0,0,34); os2.BackgroundTransparency=1; os2.ScrollBarThickness=3; os2.ScrollBarImageColor3=Theme.Accent; os2.CanvasSize=UDim2.new(0,0,0,0)
-            local dL=Instance.new("UIListLayout",os2); dL.Padding=UDim.new(0,2); dL.HorizontalAlignment=Enum.HorizontalAlignment.Center
-            local dP=Instance.new("UIPadding",os2); dP.PaddingLeft=UDim.new(0,5); dP.PaddingRight=UDim.new(0,5)
-            local isOpen=false; local oBtns={}
-            for _,opt in ipairs(options) do
-                local ob=Btn(os2,{Size=UDim2.new(1,0,0,26),BackgroundColor3=Theme.BgElement,Text=opt,TextSize=13}); Corner(ob,5)
-                ob.MouseEnter:Connect(function() T(ob,{BackgroundColor3=Theme.AccentDark},0.1) end)
-                ob.MouseLeave:Connect(function() T(ob,{BackgroundColor3=Theme.BgElement},0.1) end)
-                ob.MouseButton1Click:Connect(function()
-                    selected=opt; btn.Text="  "..opt; isOpen=false; arrow.Text="v"
-                    T(drop,{Size=UDim2.new(1,0,0,0)},0.18); task.wait(0.2); drop.Visible=false
-                    pcall(callback,opt)
-                end)
-                table.insert(oBtns,ob)
-            end
-            sb:GetPropertyChangedSignal("Text"):Connect(function()
-                local q=sb.Text:lower(); local vis=0
-                for _,ob in ipairs(oBtns) do ob.Visible=ob.Text:lower():find(q,1,true)~=nil; if ob.Visible then vis+=1 end end
-                os2.CanvasSize=UDim2.new(0,0,0,vis*28)
-            end)
-            btn.MouseButton1Click:Connect(function()
-                isOpen=not isOpen; arrow.Text=isOpen and "^" or "v"
-                if isOpen then drop.Visible=true; os2.CanvasSize=UDim2.new(0,0,0,#oBtns*28); T(drop,{Size=UDim2.new(1,0,0,math.min(#oBtns*28+40,165))},0.18)
-                else T(drop,{Size=UDim2.new(1,0,0,0)},0.18); task.wait(0.2); if not isOpen then drop.Visible=false end end
-            end)
-            regElem(labelText, function() return selected end, function(v) for _,ob in ipairs(oBtns) do if ob.Text==v then ob.MouseButton1Click:Fire() end end end)
+            local oBtns   = {}
+            local isOpen  = false
 
-            local DdObj={}
-            function DdObj:SetValue(v) for _,ob in ipairs(oBtns) do if ob.Text==v then ob.MouseButton1Click:Fire() end end end
-            function DdObj:SetVisible(v) btn.Visible=v; drop.Visible=v and drop.Visible end
+            -- The main toggle button
+            local btn = Btn(scroll, {
+                LayoutOrder = nxt(),
+                Size = UDim2.new(1,0,0,32),
+                BackgroundColor3 = Theme.BgElement,
+                Text = "",   -- FIX: no text on the button frame itself
+            })
+            Corner(btn, 7)
+            Stroke(btn, Theme.Accent, 1, 0.65)
+
+            -- Label inside button (left side)
+            local btnLabel = Label(btn, {
+                Size = UDim2.new(1,-36,1,0),
+                Position = UDim2.new(0,10,0,0),
+                Text = labelText,
+                TextSize = 13,
+                TextColor3 = Theme.TextSecondary,
+                TextXAlignment = Enum.TextXAlignment.Left,
+            })
+
+            -- Arrow indicator (right side only)
+            local arrow = Label(btn, {
+                Size = UDim2.new(0,20,1,0),
+                Position = UDim2.new(1,-24,0,0),
+                Text = "▾",
+                Font = Enum.Font.GothamBold,
+                TextSize = 14,
+                TextColor3 = Theme.Accent,
+                TextXAlignment = Enum.TextXAlignment.Center,
+            })
+
+            -- Drop panel (rendered AFTER the button in layout order)
+            local drop = Frame(scroll, {
+                LayoutOrder = nxt(),
+                Size = UDim2.new(1,0,0,0),
+                BackgroundColor3 = Theme.BgElement2,
+                ClipsDescendants = true,
+                Visible = false,
+            })
+            Corner(drop, 7)
+            Stroke(drop, Theme.Accent, 1, 0.75)
+
+            -- Search box inside panel
+            local sb = Box(drop, {
+                Size = UDim2.new(1,-10,0,26),
+                Position = UDim2.new(0,5,0,4),
+                PlaceholderText = "Search...",
+                BackgroundColor3 = Theme.BgElement,
+                TextSize = 12,
+                Font = Enum.Font.Gotham,
+            })
+            Corner(sb, 5)
+            local sbPad = Instance.new("UIPadding", sb)
+            sbPad.PaddingLeft = UDim.new(0,6)
+
+            -- Scroll inside panel for options
+            local os2 = Instance.new("ScrollingFrame", drop)
+            os2.Size = UDim2.new(1,0,1,-36)
+            os2.Position = UDim2.new(0,0,0,34)
+            os2.BackgroundTransparency = 1
+            os2.ScrollBarThickness = 3
+            os2.ScrollBarImageColor3 = Theme.Accent
+            os2.CanvasSize = UDim2.new(0,0,0,0)
+            local dL = Instance.new("UIListLayout", os2)
+            dL.Padding = UDim.new(0,2)
+            dL.HorizontalAlignment = Enum.HorizontalAlignment.Center
+            local dP = Instance.new("UIPadding", os2)
+            dP.PaddingLeft = UDim.new(0,5)
+            dP.PaddingRight = UDim.new(0,5)
+            dP.PaddingTop = UDim.new(0,3)
+
+            local function buildOptionBtn(opt)
+                local ob = Btn(os2, {
+                    Size = UDim2.new(1,0,0,26),
+                    BackgroundColor3 = Theme.BgElement,
+                    Text = opt,
+                    TextSize = 13,
+                    TextColor3 = Theme.TextSecondary,
+                    TextXAlignment = Enum.TextXAlignment.Center,
+                })
+                Corner(ob, 5)
+                ob.MouseEnter:Connect(function() T(ob,{BackgroundColor3=Theme.AccentDark, TextColor3=Theme.TextPrimary},0.1) end)
+                ob.MouseLeave:Connect(function()
+                    T(ob,{BackgroundColor3=selected==opt and Theme.AccentDark or Theme.BgElement, TextColor3=selected==opt and Theme.TextPrimary or Theme.TextSecondary},0.1)
+                end)
+                ob.MouseButton1Click:Connect(function()
+                    selected = opt
+                    btnLabel.Text = opt
+                    btnLabel.TextColor3 = Theme.TextPrimary
+                    isOpen = false
+                    arrow.Text = "▾"
+                    T(drop,{Size=UDim2.new(1,0,0,0)},0.18)
+                    task.wait(0.2); drop.Visible = false
+                    -- Highlight selected
+                    for _, b2 in ipairs(oBtns) do
+                        b2.BackgroundColor3 = b2.Text == opt and Theme.AccentDark or Theme.BgElement
+                        b2.TextColor3 = b2.Text == opt and Theme.TextPrimary or Theme.TextSecondary
+                    end
+                    pcall(callback, opt)
+                end)
+                return ob
+            end
+
+            local function populateOptions(opts)
+                -- Clear existing
+                for _, ob in ipairs(oBtns) do ob:Destroy() end
+                oBtns = {}
+                for _, opt in ipairs(opts) do
+                    table.insert(oBtns, buildOptionBtn(opt))
+                end
+                os2.CanvasSize = UDim2.new(0,0,0,#oBtns*28)
+            end
+
+            populateOptions(options)
+
+            -- Search filter
+            sb:GetPropertyChangedSignal("Text"):Connect(function()
+                local q = sb.Text:lower()
+                local vis = 0
+                for _, ob in ipairs(oBtns) do
+                    ob.Visible = q == "" or ob.Text:lower():find(q, 1, true) ~= nil
+                    if ob.Visible then vis += 1 end
+                end
+                os2.CanvasSize = UDim2.new(0,0,0,vis*28)
+            end)
+
+            -- Toggle open/close
+            btn.MouseButton1Click:Connect(function()
+                isOpen = not isOpen
+                arrow.Text = isOpen and "▴" or "▾"
+                if isOpen then
+                    sb.Text = ""
+                    for _, ob in ipairs(oBtns) do ob.Visible = true end
+                    os2.CanvasSize = UDim2.new(0,0,0,#oBtns*28)
+                    drop.Visible = true
+                    T(drop,{Size=UDim2.new(1,0,0,math.min(#oBtns*28+40,165))},0.18)
+                else
+                    T(drop,{Size=UDim2.new(1,0,0,0)},0.18)
+                    task.wait(0.2); if not isOpen then drop.Visible=false end
+                end
+            end)
+
+            btn.MouseEnter:Connect(function() T(btn,{BackgroundColor3=Color3.fromRGB(32,32,38)},0.1) end)
+            btn.MouseLeave:Connect(function() T(btn,{BackgroundColor3=Theme.BgElement},0.1) end)
+
+            regElem(labelText, function() return selected end, function(v)
+                for _, ob in ipairs(oBtns) do
+                    if ob.Text == v then ob.MouseButton1Click:Fire() end
+                end
+            end)
+
+            local DdObj = {}
+            -- FIX: RefreshOptions — replaces the option list dynamically (used by config tab)
+            function DdObj:RefreshOptions(newOpts)
+                local wasOpen = isOpen
+                if wasOpen then
+                    isOpen = false; arrow.Text = "▾"
+                    drop.Size = UDim2.new(1,0,0,0); drop.Visible = false
+                end
+                selected = nil
+                btnLabel.Text = labelText
+                btnLabel.TextColor3 = Theme.TextSecondary
+                populateOptions(newOpts)
+            end
+            function DdObj:SetValue(v)
+                for _, ob in ipairs(oBtns) do
+                    if ob.Text == v then ob.MouseButton1Click:Fire() end
+                end
+            end
+            function DdObj:SetVisible(v)
+                btn.Visible = v
+                if not v then drop.Visible = false end
+            end
             return DdObj
         end
 
@@ -1435,18 +1696,27 @@ function Library:CreateWindow(Config)
                 return t
             end
 
+            -- FIX: no text on button itself, label child instead
             local btn = Btn(scroll, {
                 LayoutOrder = nxt(),
                 Size = UDim2.new(1,0,0,32),
                 BackgroundColor3 = Theme.BgElement,
-                Text = "  " .. labelText,
-                TextXAlignment = Enum.TextXAlignment.Left,
+                Text = "",
             })
             Corner(btn, 7); Stroke(btn, Theme.Accent, 1, 0.65)
 
+            local btnLabel = Label(btn, {
+                Size = UDim2.new(1,-60,1,0),
+                Position = UDim2.new(0,10,0,0),
+                Text = labelText,
+                TextSize = 13,
+                TextColor3 = Theme.TextSecondary,
+                TextXAlignment = Enum.TextXAlignment.Left,
+            })
+
             local badge = Frame(btn, {
                 Size = UDim2.new(0,22,0,22),
-                Position = UDim2.new(1,-54,0.5,-11),
+                Position = UDim2.new(1,-50,0.5,-11),
                 BackgroundColor3 = Theme.AccentDark,
             })
             Corner(badge, 11)
@@ -1459,12 +1729,13 @@ function Library:CreateWindow(Config)
             })
 
             Label(btn, {
-                Size = UDim2.new(0,26,1,0),
-                Position = UDim2.new(1,-28,0,0),
-                Text = "v",
+                Size = UDim2.new(0,20,1,0),
+                Position = UDim2.new(1,-24,0,0),
+                Text = "▾",
                 Font = Enum.Font.GothamBold,
-                TextSize = 12,
+                TextSize = 14,
                 TextColor3 = Theme.Accent,
+                TextXAlignment = Enum.TextXAlignment.Center,
             })
 
             local drop = Frame(scroll, {
@@ -1530,12 +1801,8 @@ function Library:CreateWindow(Config)
 
                 local function applyRowState(on)
                     isSelected = on
-                    if on then
-                        selected[opt] = true
-                    else
-                        selected[opt] = nil
-                    end
-                    chkMark.Text = on and "v" or ""
+                    if on then selected[opt] = true else selected[opt] = nil end
+                    chkMark.Text = on and "✓" or ""
                     T(chk,  {BackgroundColor3 = on and Theme.Accent or Theme.BgElement2}, 0.12)
                     T(row,  {BackgroundColor3 = on and Color3.fromRGB(38,10,58) or Theme.BgElement}, 0.12)
                     local c = getCount()
@@ -1570,6 +1837,9 @@ function Library:CreateWindow(Config)
                 end
             end)
 
+            btn.MouseEnter:Connect(function() T(btn,{BackgroundColor3=Color3.fromRGB(32,32,38)},0.1) end)
+            btn.MouseLeave:Connect(function() T(btn,{BackgroundColor3=Theme.BgElement},0.1) end)
+
             local MDObj = {}
             function MDObj:SetValue(arr)
                 for opt2, ref in pairs(rowRefs) do
@@ -1582,7 +1852,7 @@ function Library:CreateWindow(Config)
                     for _, v in ipairs(arr) do
                         if rowRefs[v] then
                             selected[v] = true
-                            rowRefs[v].chkMark.Text = "v"
+                            rowRefs[v].chkMark.Text = "✓"
                             rowRefs[v].chk.BackgroundColor3 = Theme.Accent
                             rowRefs[v].row.BackgroundColor3 = Color3.fromRGB(38,10,58)
                         end
@@ -1644,30 +1914,22 @@ function Library:CreateWindow(Config)
         -- ── Color Picker ──────────────────────────────────────────────────────
         function TabElements:CreateColorPicker(labelText, defColor, callback)
             defColor = defColor or Theme.Accent
-
-            -- ── Shared HSV state (single source of truth) ─────────────────────
-            -- All pickers (wheel, V-slider, RGB sliders) read/write h,s,v.
-            -- Color3.toHSV returns hue 0-1, sat 0-1, val 0-1.
             local h, s, v = Color3.toHSV(defColor)
-
-            -- collapsed height / expanded heights
             local H_HEADER  = 32
-            local H_WHEEL   = 198   -- header + tab bar + wheel panel
-            local H_RGB     = 142   -- header + tab bar + 3 RGB sliders
+            local H_WHEEL   = 198
+            local H_RGB     = 142
             local activeTab = "wheel"
             local exp       = false
 
             local f = ElemFrame(H_HEADER)
             f.ClipsDescendants = true
 
-            -- ── Header row (always visible) ───────────────────────────────────
             local hdr = Btn(f, {Size=UDim2.new(1,0,0,H_HEADER), BackgroundTransparency=1, Text=""})
             local hPad = Instance.new("UIPadding", hdr); hPad.PaddingLeft = UDim.new(0,10)
             Label(hdr, {Size=UDim2.new(1,-40,1,0), Text="Color: "..labelText, TextXAlignment=Enum.TextXAlignment.Left})
             local prev = Frame(hdr, {Size=UDim2.new(0,18,0,18), Position=UDim2.new(1,-28,0.5,-9), BackgroundColor3=defColor})
             Corner(prev, 4)
 
-            -- ── Expand / collapse ─────────────────────────────────────────────
             local function expandedH()
                 return activeTab == "wheel" and H_WHEEL or H_RGB
             end
@@ -1676,7 +1938,6 @@ function Library:CreateWindow(Config)
                 T(f, {Size=UDim2.new(1,0,0, exp and expandedH() or H_HEADER)}, 0.22)
             end)
 
-            -- ── Tab switcher bar ──────────────────────────────────────────────
             local tabBar = Frame(f, {
                 Size=UDim2.new(1,-16,0,24),
                 Position=UDim2.new(0,8,0,H_HEADER+4),
@@ -1700,7 +1961,6 @@ function Library:CreateWindow(Config)
             local wheelTabBtn = makeTabBtn("🎨  Wheel", 0)
             local rgbTabBtn   = makeTabBtn("⚙  RGB",   0.5)
 
-            -- active-tab indicator pill
             local tabPill = Frame(tabBar, {
                 Size=UDim2.new(0.5,-4,1,-4),
                 Position=UDim2.new(0,2,0,2),
@@ -1708,33 +1968,17 @@ function Library:CreateWindow(Config)
             })
             Corner(tabPill, 5)
 
-            -- ── Panels ────────────────────────────────────────────────────────
-            local PANEL_Y = H_HEADER + 32  -- top of panels (below tab bar)
+            local PANEL_Y = H_HEADER + 32
+            local wheelPanel = Frame(f, {Size=UDim2.new(1,-16,0,158), Position=UDim2.new(0,8,0,PANEL_Y), BackgroundTransparency=1})
+            local rgbPanel   = Frame(f, {Size=UDim2.new(1,-16,0,102), Position=UDim2.new(0,8,0,PANEL_Y), BackgroundTransparency=1, Visible=false})
 
-            -- Wheel panel
-            local wheelPanel = Frame(f, {
-                Size=UDim2.new(1,-16,0,158),
-                Position=UDim2.new(0,8,0,PANEL_Y),
-                BackgroundTransparency=1,
-            })
-
-            -- RGB panel
-            local rgbPanel = Frame(f, {
-                Size=UDim2.new(1,-16,0,102),
-                Position=UDim2.new(0,8,0,PANEL_Y),
-                BackgroundTransparency=1,
-                Visible=false,
-            })
-
-            -- ── Shared helpers ────────────────────────────────────────────────
             local function hsvToRGB()
                 local c = Color3.fromHSV(h, s, v)
                 return math.floor(c.R*255+0.5), math.floor(c.G*255+0.5), math.floor(c.B*255+0.5)
             end
 
-            -- forward-declare so RGB sliders and wheel can cross-update
-            local syncWheelFromHSV  -- function()
-            local syncRGBFromHSV    -- function()
+            local syncWheelFromHSV
+            local syncRGBFromHSV
 
             local function fireCallback()
                 local col = Color3.fromHSV(h, s, v)
@@ -1742,117 +1986,47 @@ function Library:CreateWindow(Config)
                 pcall(callback, col)
             end
 
-            -- ══════════════════════════════════════════════════════════════════
-            -- WHEEL PANEL
-            -- ══════════════════════════════════════════════════════════════════
-            -- Roblox doesn't have a built-in circle gradient, so we approximate
-            -- the hue wheel with a rotating UIGradient on a square clipped to a
-            -- circle, and overlay a white-to-transparent radial gradient for
-            -- saturation.  The user drags a cursor dot around the wheel.
-            --
-            -- Layout:
-            --   [  color wheel (128×128)  ] [ V slider (tall, right side) ]
-            --   [  hex input at bottom    ]
-            -- ─────────────────────────────────────────────────────────────────
             local WHEEL_SIZE = 128
             local WHEEL_MID  = WHEEL_SIZE / 2
 
-            -- Wheel outer clip (circle)
-            local wheelClip = Frame(wheelPanel, {
-                Size=UDim2.new(0,WHEEL_SIZE,0,WHEEL_SIZE),
-                Position=UDim2.new(0,0,0,0),
-                BackgroundTransparency=1,
-                ClipsDescendants=true,
-            })
-            Corner(wheelClip, WHEEL_MID)   -- makes it a circle
+            local wheelClip = Frame(wheelPanel, {Size=UDim2.new(0,WHEEL_SIZE,0,WHEEL_SIZE), Position=UDim2.new(0,0,0,0), BackgroundTransparency=1, ClipsDescendants=true})
+            Corner(wheelClip, WHEEL_MID)
 
-            -- Hue ring: a square with a conic-approximation gradient.
-            -- We stack 6 rotated gradient strips to approximate a full hue ring.
             local HUE_COLORS = {
-                Color3.fromRGB(255,0,0),   -- 0°   red
-                Color3.fromRGB(255,255,0), -- 60°  yellow
-                Color3.fromRGB(0,255,0),   -- 120° green
-                Color3.fromRGB(0,255,255), -- 180° cyan
-                Color3.fromRGB(0,0,255),   -- 240° blue
-                Color3.fromRGB(255,0,255), -- 300° magenta
-                Color3.fromRGB(255,0,0),   -- 360° red (close the loop)
+                Color3.fromRGB(255,0,0), Color3.fromRGB(255,255,0), Color3.fromRGB(0,255,0),
+                Color3.fromRGB(0,255,255), Color3.fromRGB(0,0,255), Color3.fromRGB(255,0,255), Color3.fromRGB(255,0,0),
             }
 
-            -- Build a hue square from many thin vertical slices
-            -- Each slice is a 2-pixel-wide frame with a 2-stop gradient
             local sliceCount = 64
             for i = 1, sliceCount do
                 local t0 = (i-1)/sliceCount
                 local t1 = i/sliceCount
-                -- interpolate through the 6-segment hue ramp
                 local function hueAt(t)
                     local seg = t * 6
                     local idx = math.floor(seg)
                     local frac = seg - idx
                     local c0 = HUE_COLORS[idx+1] or HUE_COLORS[1]
                     local c1 = HUE_COLORS[idx+2] or HUE_COLORS[1]
-                    return Color3.new(
-                        c0.R + (c1.R-c0.R)*frac,
-                        c0.G + (c1.G-c0.G)*frac,
-                        c0.B + (c1.B-c0.B)*frac
-                    )
+                    return Color3.new(c0.R+(c1.R-c0.R)*frac, c0.G+(c1.G-c0.G)*frac, c0.B+(c1.B-c0.B)*frac)
                 end
-                local sl = Frame(wheelClip, {
-                    Size=UDim2.new(0, math.ceil(WHEEL_SIZE/sliceCount)+1, 1, 0),
-                    Position=UDim2.new(t0, 0, 0, 0),
-                    BorderSizePixel=0,
-                    BackgroundColor3=hueAt(t0),
-                })
+                local sl = Frame(wheelClip, {Size=UDim2.new(0,math.ceil(WHEEL_SIZE/sliceCount)+1,1,0), Position=UDim2.new(t0,0,0,0), BorderSizePixel=0, BackgroundColor3=hueAt(t0)})
                 local g = Instance.new("UIGradient", sl)
-                g.Color = ColorSequence.new(hueAt(t0), hueAt(t1))
-                g.Rotation = 0
+                g.Color = ColorSequence.new(hueAt(t0), hueAt(t1)); g.Rotation = 0
             end
 
-            -- White centre-to-edge radial overlay (for saturation: centre=white,
-            -- edge=full-hue).  A UIGradient on a full-size frame goes left→right,
-            -- so we use transparency: centre transparent white → edge transparent.
-            -- We approximate with 4 overlapping radial wedges.
-            local satOverlay = Frame(wheelClip, {
-                Size=UDim2.new(1,0,1,0),
-                BackgroundColor3=Color3.new(1,1,1),
-                BackgroundTransparency=0,
-            })
+            local satOverlay = Frame(wheelClip, {Size=UDim2.new(1,0,1,0), BackgroundColor3=Color3.new(1,1,1)})
             local satG = Instance.new("UIGradient", satOverlay)
-            satG.Color = ColorSequence.new({
-                ColorSequenceKeypoint.new(0, Color3.new(1,1,1)),
-                ColorSequenceKeypoint.new(1, Color3.new(1,1,1)),
-            })
-            satG.Transparency = NumberSequence.new({
-                NumberSequenceKeypoint.new(0,   0),
-                NumberSequenceKeypoint.new(0.5, 0.65),
-                NumberSequenceKeypoint.new(1,   1),
-            })
+            satG.Color = ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.new(1,1,1)), ColorSequenceKeypoint.new(1,Color3.new(1,1,1))})
+            satG.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0,0), NumberSequenceKeypoint.new(0.5,0.65), NumberSequenceKeypoint.new(1,1)})
 
-            -- Black value overlay (covers the whole wheel, transparency = v)
-            local valOverlay = Frame(wheelClip, {
-                Size=UDim2.new(1,0,1,0),
-                BackgroundColor3=Color3.new(0,0,0),
-                BackgroundTransparency=v,
-            })
+            local valOverlay = Frame(wheelClip, {Size=UDim2.new(1,0,1,0), BackgroundColor3=Color3.new(0,0,0), BackgroundTransparency=v})
+            local wheelCursor = Frame(wheelClip, {Size=UDim2.new(0,12,0,12), AnchorPoint=Vector2.new(0.5,0.5), BackgroundColor3=Color3.new(1,1,1), ZIndex=5})
+            Corner(wheelCursor, 6); Stroke(wheelCursor, Color3.new(0,0,0), 1.5, 0)
 
-            -- Cursor dot on the wheel
-            local wheelCursor = Frame(wheelClip, {
-                Size=UDim2.new(0,12,0,12),
-                AnchorPoint=Vector2.new(0.5,0.5),
-                BackgroundColor3=Color3.new(1,1,1),
-                ZIndex=5,
-            })
-            Corner(wheelCursor, 6)
-            Stroke(wheelCursor, Color3.new(0,0,0), 1.5, 0)
-
-            -- Convert h,s to wheel XY (polar → cartesian on unit circle)
-            -- h=0 is right, goes counter-clockwise matching Roblox Color3.fromHSV
             local function hsToCursorPos()
                 local angle = h * 2 * math.pi
                 local dist  = s * WHEEL_MID
-                local cx = WHEEL_MID + dist * math.cos(angle)
-                local cy = WHEEL_MID - dist * math.sin(angle)
-                return cx, cy
+                return WHEEL_MID + dist * math.cos(angle), WHEEL_MID - dist * math.sin(angle)
             end
 
             syncWheelFromHSV = function()
@@ -1862,108 +2036,55 @@ function Library:CreateWindow(Config)
             end
             syncWheelFromHSV()
 
-            -- Hit frame for dragging on the wheel
             local wheelHit = Btn(wheelClip, {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text="", ZIndex=4})
             local wheelDrag = false
 
             local function applyWheelPos(mx, my)
-                -- mx,my in absolute screen coords → local to wheel
-                local ax = wheelClip.AbsolutePosition.X
-                local ay = wheelClip.AbsolutePosition.Y
-                local lx = mx - ax - WHEEL_MID
-                local ly = my - ay - WHEEL_MID
-                local dist = math.sqrt(lx*lx + ly*ly)
+                local ax = wheelClip.AbsolutePosition.X; local ay = wheelClip.AbsolutePosition.Y
+                local lx = mx-ax-WHEEL_MID; local ly = my-ay-WHEEL_MID
+                local dist = math.sqrt(lx*lx+ly*ly)
                 local angle = math.atan2(-ly, lx)
                 if angle < 0 then angle = angle + 2*math.pi end
-                h = angle / (2*math.pi)
-                s = math.clamp(dist / WHEEL_MID, 0, 1)
-                syncWheelFromHSV()
-                syncRGBFromHSV()
-                fireCallback()
+                h = angle/(2*math.pi); s = math.clamp(dist/WHEEL_MID,0,1)
+                syncWheelFromHSV(); syncRGBFromHSV(); fireCallback()
             end
 
             wheelHit.InputBegan:Connect(function(i)
-                if i.UserInputType == Enum.UserInputType.MouseButton1 then
-                    wheelDrag = true
-                    applyWheelPos(i.Position.X, i.Position.Y)
-                end
+                if i.UserInputType==Enum.UserInputType.MouseButton1 then wheelDrag=true; applyWheelPos(i.Position.X, i.Position.Y) end
             end)
-            conn(UserInputService.InputEnded:Connect(function(i)
-                if i.UserInputType == Enum.UserInputType.MouseButton1 then wheelDrag = false end
-            end))
+            conn(UserInputService.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then wheelDrag=false end end))
             conn(UserInputService.InputChanged:Connect(function(i)
-                if wheelDrag and i.UserInputType == Enum.UserInputType.MouseMovement then
-                    applyWheelPos(i.Position.X, i.Position.Y)
-                end
+                if wheelDrag and i.UserInputType==Enum.UserInputType.MouseMovement then applyWheelPos(i.Position.X, i.Position.Y) end
             end))
 
-            -- ── Value (brightness) slider — right of wheel ────────────────────
             local V_W, V_H = 18, WHEEL_SIZE
-            local vTrack = Frame(wheelPanel, {
-                Size=UDim2.new(0,V_W,0,V_H),
-                Position=UDim2.new(0,WHEEL_SIZE+8,0,0),
-                BackgroundColor3=Color3.new(0,0,0),
-            })
+            local vTrack = Frame(wheelPanel, {Size=UDim2.new(0,V_W,0,V_H), Position=UDim2.new(0,WHEEL_SIZE+8,0,0), BackgroundColor3=Color3.new(0,0,0)})
             Corner(vTrack, 5)
-            -- gradient: top=current hue pure colour, bottom=black
-            local vGrad = Instance.new("UIGradient", vTrack)
-            vGrad.Rotation = 90
-            local function updateVGrad()
-                vGrad.Color = ColorSequence.new(
-                    Color3.fromHSV(h, s, 1),
-                    Color3.new(0,0,0)
-                )
-            end
+            local vGrad = Instance.new("UIGradient", vTrack); vGrad.Rotation = 90
+            local function updateVGrad() vGrad.Color = ColorSequence.new(Color3.fromHSV(h,s,1), Color3.new(0,0,0)) end
             updateVGrad()
 
-            local vKnob = Frame(vTrack, {
-                Size=UDim2.new(1,4,0,10),
-                AnchorPoint=Vector2.new(0.5,0.5),
-                Position=UDim2.new(0.5,0, 1-v, 0),
-                BackgroundColor3=Color3.new(1,1,1),
-                ZIndex=3,
-            })
-            Corner(vKnob, 3)
-            Stroke(vKnob, Color3.new(0,0,0), 1.5, 0)
+            local vKnob = Frame(vTrack, {Size=UDim2.new(1,4,0,10), AnchorPoint=Vector2.new(0.5,0.5), Position=UDim2.new(0.5,0,1-v,0), BackgroundColor3=Color3.new(1,1,1), ZIndex=3})
+            Corner(vKnob, 3); Stroke(vKnob, Color3.new(0,0,0), 1.5, 0)
 
             local vDrag = false
-            local vHit  = Btn(vTrack, {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text="", ZIndex=2})
+            local vHit = Btn(vTrack, {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text="", ZIndex=2})
 
             local function applyV(sy)
-                local ay = vTrack.AbsolutePosition.Y
-                local ah = vTrack.AbsoluteSize.Y
-                v = 1 - math.clamp((sy - ay) / ah, 0, 1)
-                vKnob.Position  = UDim2.new(0.5, 0, 1-v, 0)
+                local ay = vTrack.AbsolutePosition.Y; local ah = vTrack.AbsoluteSize.Y
+                v = 1-math.clamp((sy-ay)/ah,0,1)
+                vKnob.Position = UDim2.new(0.5,0,1-v,0)
                 valOverlay.BackgroundTransparency = v
-                updateVGrad()
-                syncRGBFromHSV()
-                fireCallback()
+                updateVGrad(); syncRGBFromHSV(); fireCallback()
             end
 
-            vHit.InputBegan:Connect(function(i)
-                if i.UserInputType == Enum.UserInputType.MouseButton1 then
-                    vDrag = true; applyV(i.Position.Y)
-                end
-            end)
-            conn(UserInputService.InputEnded:Connect(function(i)
-                if i.UserInputType == Enum.UserInputType.MouseButton1 then vDrag = false end
-            end))
-            conn(UserInputService.InputChanged:Connect(function(i)
-                if vDrag and i.UserInputType == Enum.UserInputType.MouseMovement then applyV(i.Position.Y) end
-            end))
+            vHit.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then vDrag=true; applyV(i.Position.Y) end end)
+            conn(UserInputService.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then vDrag=false end end))
+            conn(UserInputService.InputChanged:Connect(function(i) if vDrag and i.UserInputType==Enum.UserInputType.MouseMovement then applyV(i.Position.Y) end end))
 
-            -- ── Hex input — below wheel ───────────────────────────────────────
-            local hexRow = Frame(wheelPanel, {
-                Size=UDim2.new(0, WHEEL_SIZE+8+V_W, 0, 24),
-                Position=UDim2.new(0,0,0,WHEEL_SIZE+6),
-                BackgroundTransparency=1,
-            })
+            local hexRow = Frame(wheelPanel, {Size=UDim2.new(0,WHEEL_SIZE+8+V_W,0,24), Position=UDim2.new(0,0,0,WHEEL_SIZE+6), BackgroundTransparency=1})
             Label(hexRow, {Size=UDim2.new(0,26,1,0), Text="#HEX", Font=Enum.Font.GothamBold, TextSize=10, TextColor3=Theme.TextSecondary})
-            local hexBox = Box(hexRow, {
-                Size=UDim2.new(1,-30,1,0), Position=UDim2.new(0,30,0,0),
-                BackgroundColor3=Theme.BgElement2, Font=Enum.Font.Code, TextSize=11,
-                Text="", TextXAlignment=Enum.TextXAlignment.Left,
-            })
+            local hexBox = Box(hexRow, {Size=UDim2.new(1,-30,1,0), Position=UDim2.new(0,30,0,0), BackgroundColor3=Theme.BgElement2, Font=Enum.Font.Code, TextSize=11, Text="", TextXAlignment=Enum.TextXAlignment.Left})
             Corner(hexBox, 4)
             local hexPad = Instance.new("UIPadding", hexBox); hexPad.PaddingLeft = UDim.new(0,5)
 
@@ -1982,24 +2103,24 @@ function Library:CreateWindow(Config)
                     if ri and gi and bi then
                         local col = Color3.fromRGB(ri,gi,bi)
                         h,s,v = Color3.toHSV(col)
-                        syncWheelFromHSV()
-                        updateVGrad()
-                        syncRGBFromHSV()
-                        fireCallback()
+                        syncWheelFromHSV(); updateVGrad(); syncRGBFromHSV(); fireCallback()
                     end
                 end
                 syncHex()
             end)
 
-            -- ══════════════════════════════════════════════════════════════════
-            -- RGB PANEL  (3 sliders identical to original, now HSV-synced)
-            -- ══════════════════════════════════════════════════════════════════
             local rgbLayout = Instance.new("UIListLayout", rgbPanel)
-            rgbLayout.Padding  = UDim.new(0,5)
-            rgbLayout.SortOrder = Enum.SortOrder.LayoutOrder
+            rgbLayout.Padding = UDim.new(0,5); rgbLayout.SortOrder = Enum.SortOrder.LayoutOrder
 
-            -- r2/g2/b2 refs so syncRGBFromHSV can push values
             local rSetFn, gSetFn, bSetFn
+            local rr, gg, bb
+            do local r2,g2,b2 = hsvToRGB(); rr=r2; gg=g2; bb=b2 end
+
+            function updateHSVFromRGB()
+                local col = Color3.fromRGB(rr,gg,bb)
+                h,s,v = Color3.toHSV(col)
+                syncWheelFromHSV(); updateVGrad(); syncHex(); fireCallback()
+            end
 
             local function makeRGBSlider(lbl, initVal, onSet, order)
                 local row = Frame(rgbPanel, {LayoutOrder=order, Size=UDim2.new(1,0,0,26), BackgroundTransparency=1})
@@ -2012,112 +2133,61 @@ function Library:CreateWindow(Config)
                 kn.AnchorPoint = Vector2.new(0.5,0.5)
                 kn.Position = UDim2.new(initVal/255,0,0.5,0)
                 Corner(kn,6)
-                local vb = Box(row, {
-                    Size=UDim2.new(0,28,1,0), Position=UDim2.new(1,-28,0,0),
-                    BackgroundColor3=Theme.BgElement2, Font=Enum.Font.Code, TextSize=10,
-                    Text=tostring(initVal), TextXAlignment=Enum.TextXAlignment.Center,
-                })
+                local vb = Box(row, {Size=UDim2.new(0,28,1,0), Position=UDim2.new(1,-28,0,0), BackgroundColor3=Theme.BgElement2, Font=Enum.Font.Code, TextSize=10, Text=tostring(initVal), TextXAlignment=Enum.TextXAlignment.Center})
                 Corner(vb,3)
 
                 local cur = initVal
                 local function setVal(nv)
-                    nv = math.clamp(math.floor(nv+0.5),0,255)
-                    cur = nv
-                    fl.Size = UDim2.new(nv/255,0,1,0)
-                    kn.Position = UDim2.new(nv/255,0,0.5,0)
-                    vb.Text = tostring(nv)
-                    onSet(nv)
-                end
-                local function setValAndSync(nv)
-                    setVal(nv)
-                    -- derive new h,s,v from changed RGB
-                    local rn = lbl=="R" and nv or (rSetFn and rSetFn() or 0)
-                    -- We sync by reading back from RGB state after onSet
-                    -- (onSet updates r/g/b locals in closure — see below)
-                    -- Just fire fireCallback after onSet already updated h,s,v
+                    nv = math.clamp(math.floor(nv+0.5),0,255); cur = nv
+                    fl.Size = UDim2.new(nv/255,0,1,0); kn.Position = UDim2.new(nv/255,0,0.5,0)
+                    vb.Text = tostring(nv); onSet(nv)
                 end
 
                 local drg = false
                 tk.InputBegan:Connect(function(i)
-                    if i.UserInputType == Enum.UserInputType.MouseButton1 then
-                        drg = true
-                        setVal(math.clamp((i.Position.X-tk.AbsolutePosition.X)/tk.AbsoluteSize.X,0,1)*255)
+                    if i.UserInputType==Enum.UserInputType.MouseButton1 then
+                        drg=true; setVal(math.clamp((i.Position.X-tk.AbsolutePosition.X)/tk.AbsoluteSize.X,0,1)*255)
                         onSet(cur); updateHSVFromRGB()
                     end
                 end)
-                conn(UserInputService.InputEnded:Connect(function(i)
-                    if i.UserInputType == Enum.UserInputType.MouseButton1 then drg = false end
-                end))
+                conn(UserInputService.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drg=false end end))
                 conn(UserInputService.InputChanged:Connect(function(i)
-                    if drg and i.UserInputType == Enum.UserInputType.MouseMovement then
+                    if drg and i.UserInputType==Enum.UserInputType.MouseMovement then
                         setVal(math.clamp((i.Position.X-tk.AbsolutePosition.X)/tk.AbsoluteSize.X,0,1)*255)
                         onSet(cur); updateHSVFromRGB()
                     end
                 end))
-                vb.FocusLost:Connect(function()
-                    setVal(tonumber(vb.Text) or cur)
-                    onSet(cur); updateHSVFromRGB()
-                end)
-
-                -- return a push-setter so syncRGBFromHSV can update the knobs
-                return function(nv)
-                    setVal(nv)
-                end
-            end
-
-            -- RGB state (maintained alongside h,s,v)
-            local rr, gg, bb
-            do local r2,g2,b2 = hsvToRGB(); rr=r2; gg=g2; bb=b2 end
-
-            -- updateHSVFromRGB: called when user moves RGB sliders
-            function updateHSVFromRGB()
-                local col = Color3.fromRGB(rr,gg,bb)
-                h,s,v = Color3.toHSV(col)
-                syncWheelFromHSV()
-                updateVGrad()
-                syncHex()
-                fireCallback()
+                vb.FocusLost:Connect(function() setVal(tonumber(vb.Text) or cur); onSet(cur); updateHSVFromRGB() end)
+                return function(nv) setVal(nv) end
             end
 
             rSetFn = makeRGBSlider("R", rr, function(nv) rr=nv end, 1)
             gSetFn = makeRGBSlider("G", gg, function(nv) gg=nv end, 2)
             bSetFn = makeRGBSlider("B", bb, function(nv) bb=nv end, 3)
 
-            -- syncRGBFromHSV: called when wheel/V-slider changes
             syncRGBFromHSV = function()
-                local r2,g2,b2 = hsvToRGB()
-                rr=r2; gg=g2; bb=b2
-                rSetFn(r2); gSetFn(g2); bSetFn(b2)
-                updateVGrad()
-                syncHex()
+                local r2,g2,b2 = hsvToRGB(); rr=r2; gg=g2; bb=b2
+                rSetFn(r2); gSetFn(g2); bSetFn(b2); updateVGrad(); syncHex()
             end
-
             syncHex()
 
-            -- ── Tab switching logic ───────────────────────────────────────────
             local function switchTab(to)
                 activeTab = to
                 if to == "wheel" then
                     T(tabPill, {Position=UDim2.new(0,2,0,2)}, 0.15)
-                    wheelTabBtn.TextColor3 = Theme.TextAccent
-                    rgbTabBtn.TextColor3   = Theme.TextSecondary
-                    wheelPanel.Visible = true
-                    rgbPanel.Visible   = false
+                    wheelTabBtn.TextColor3 = Theme.TextAccent; rgbTabBtn.TextColor3 = Theme.TextSecondary
+                    wheelPanel.Visible = true; rgbPanel.Visible = false
                 else
                     T(tabPill, {Position=UDim2.new(0.5,2,0,2)}, 0.15)
-                    wheelTabBtn.TextColor3 = Theme.TextSecondary
-                    rgbTabBtn.TextColor3   = Theme.TextAccent
-                    wheelPanel.Visible = false
-                    rgbPanel.Visible   = true
+                    wheelTabBtn.TextColor3 = Theme.TextSecondary; rgbTabBtn.TextColor3 = Theme.TextAccent
+                    wheelPanel.Visible = false; rgbPanel.Visible = true
                 end
-                if exp then
-                    T(f, {Size=UDim2.new(1,0,0,expandedH())}, 0.15)
-                end
+                if exp then T(f, {Size=UDim2.new(1,0,0,expandedH())}, 0.15) end
             end
 
             wheelTabBtn.MouseButton1Click:Connect(function() switchTab("wheel") end)
-            rgbTabBtn.MouseButton1Click:Connect(function()   switchTab("rgb")   end)
-            switchTab("wheel")  -- start on wheel tab
+            rgbTabBtn.MouseButton1Click:Connect(function() switchTab("rgb") end)
+            switchTab("wheel")
         end
 
         -- ── Progress Bar ──────────────────────────────────────────────────────
@@ -2135,7 +2205,7 @@ function Library:CreateWindow(Config)
             return PB
         end
 
-        -- ── Search Bar (filters elements in this tab) ─────────────────────────
+        -- ── Search Bar ────────────────────────────────────────────────────────
         function TabElements:CreateSearchBar(placeholder)
             local f=Frame(scroll,{LayoutOrder=nxt(),Size=UDim2.new(1,0,0,32),BackgroundColor3=Theme.BgElement})
             Corner(f,7); Stroke(f,Theme.Accent,1,0.65)
@@ -2146,9 +2216,7 @@ function Library:CreateWindow(Config)
                 for _,child in ipairs(scroll:GetChildren()) do
                     if child~=f and not child:IsA("UIListLayout") and not child:IsA("UIPadding") then
                         local lbl=child:FindFirstChildOfClass("TextLabel")
-                        if lbl then
-                            child.Visible = q=="" or lbl.Text:lower():find(q,1,true)~=nil
-                        end
+                        if lbl then child.Visible = q=="" or lbl.Text:lower():find(q,1,true)~=nil end
                     end
                 end
             end)
@@ -2160,30 +2228,15 @@ function Library:CreateWindow(Config)
             local totalH = rowH + #rows * rowH + 4
             local f = ElemFrame(totalH); f.Size=UDim2.new(1,0,0,totalH)
             local colW = 1/#headers
-            local hRow=Frame(f,{Size=UDim2.new(1,0,0,rowH),BackgroundColor3=Theme.AccentDark})
-            Corner(hRow,6)
+            local hRow=Frame(f,{Size=UDim2.new(1,0,0,rowH),BackgroundColor3=Theme.AccentDark}); Corner(hRow,6)
             for i,h in ipairs(headers) do
-                Label(hRow,{
-                    Size=UDim2.new(colW,0,1,0),
-                    Position=UDim2.new(colW*(i-1),0,0,0),
-                    Text=h,Font=Enum.Font.GothamBold,TextSize=11,
-                    TextColor3=Color3.new(1,1,1),
-                })
+                Label(hRow,{Size=UDim2.new(colW,0,1,0),Position=UDim2.new(colW*(i-1),0,0,0),Text=h,Font=Enum.Font.GothamBold,TextSize=11,TextColor3=Color3.new(1,1,1)})
             end
             for ri, row in ipairs(rows) do
                 local bg = ri%2==0 and Theme.BgElement2 or Theme.BgElement
-                local rRow=Frame(f,{
-                    Size=UDim2.new(1,0,0,rowH),
-                    Position=UDim2.new(0,0,0,rowH+(ri-1)*rowH),
-                    BackgroundColor3=bg,
-                })
+                local rRow=Frame(f,{Size=UDim2.new(1,0,0,rowH),Position=UDim2.new(0,0,0,rowH+(ri-1)*rowH),BackgroundColor3=bg})
                 for ci, cell in ipairs(row) do
-                    Label(rRow,{
-                        Size=UDim2.new(colW,0,1,0),
-                        Position=UDim2.new(colW*(ci-1),0,0,0),
-                        Text=tostring(cell),TextSize=11,
-                        TextColor3=Theme.TextSecondary,
-                    })
+                    Label(rRow,{Size=UDim2.new(colW,0,1,0),Position=UDim2.new(colW*(ci-1),0,0,0),Text=tostring(cell),TextSize=11,TextColor3=Theme.TextSecondary})
                 end
                 local hit=Btn(rRow,{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text=""})
                 hit.MouseEnter:Connect(function() T(rRow,{BackgroundColor3=Theme.AccentDark},0.1) end)
@@ -2199,8 +2252,6 @@ function Library:CreateWindow(Config)
         if self._tabs[name] then self._tabs[name]() end
     end
 
-    -- Register a callback to fire whenever a tab is opened (by click or SetTab)
-    -- Usage: Window:OnTabOpen("Config", function() ... end)
     function Window:OnTabOpen(name, fn)
         if not self._tabOpenCallbacks[name] then
             self._tabOpenCallbacks[name] = {}
@@ -2208,7 +2259,6 @@ function Library:CreateWindow(Config)
         table.insert(self._tabOpenCallbacks[name], fn)
     end
 
-    -- Cleanup
     sg.Destroying:Connect(function()
         for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
         table.clear(connections)
