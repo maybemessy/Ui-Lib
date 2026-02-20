@@ -304,6 +304,9 @@ function Library:CreateWindow(Config)
         
         local layout = Instance.new("UIListLayout", scrollFrame)
         layout.Padding = UDim.new(0, 6)
+        -- FIXED: This line ensures elements follow the LayoutOrder we set (Button then Dropdown)
+        layout.SortOrder = Enum.SortOrder.LayoutOrder
+        
         local padding = Instance.new("UIPadding", scrollFrame)
         padding.PaddingTop = UDim.new(0, 5)
         padding.PaddingLeft = UDim.new(0, 5)
@@ -338,6 +341,7 @@ function Library:CreateWindow(Config)
         --// Label
         function TabElements:CreateLabel(text)
             local label = Instance.new("TextLabel", scrollFrame)
+            label.LayoutOrder = #scrollFrame:GetChildren() * 2
             label.Size = UDim2.new(1, -10, 0, 40)
             label.BackgroundTransparency = 1
             label.Text = text
@@ -351,6 +355,7 @@ function Library:CreateWindow(Config)
         --// Button
         function TabElements:CreateButton(text, callback)
             local btn = Instance.new("TextButton", scrollFrame)
+            btn.LayoutOrder = #scrollFrame:GetChildren() * 2
             btn.Size = UDim2.new(1, -10, 0, 30)
             btn.BackgroundTransparency = 1
             btn.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -364,6 +369,7 @@ function Library:CreateWindow(Config)
         function TabElements:CreateToggle(text, default, callback)
             local state = default or false
             local container = Instance.new("Frame", scrollFrame)
+            container.LayoutOrder = #scrollFrame:GetChildren() * 2
             container.Size = UDim2.new(1, -10, 0, 20)
             container.BackgroundTransparency = 1
 
@@ -386,6 +392,7 @@ function Library:CreateWindow(Config)
         --// Input
         function TabElements:CreateInput(placeholder, defaultText, callback)
             local input = Instance.new("TextBox", scrollFrame)
+            input.LayoutOrder = #scrollFrame:GetChildren() * 2
             input.Size = UDim2.new(1, -10, 0, 25)
             input.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
             input.BorderSizePixel = 0
@@ -404,6 +411,7 @@ function Library:CreateWindow(Config)
         --// Slider
         function TabElements:CreateSlider(labelText, minValue, maxValue, defaultValue, callback)
             local container = Instance.new("Frame", scrollFrame)
+            container.LayoutOrder = #scrollFrame:GetChildren() * 2
             container.Size = UDim2.new(1, -10, 0, 40)
             container.BackgroundTransparency = 1
 
@@ -461,11 +469,10 @@ function Library:CreateWindow(Config)
 
         --// Dropdown
         function TabElements:CreateDropdown(label, options, callback)
-            -- Create a unique order ID based on current children count to keep them paired
             local orderBase = #scrollFrame:GetChildren() * 2 
 
             local btn = Instance.new("TextButton", scrollFrame)
-            btn.LayoutOrder = orderBase -- Set button order
+            btn.LayoutOrder = orderBase 
             btn.Size = UDim2.new(1, -10, 0, 30)
             btn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
             btn.Font = Enum.Font.Code
@@ -482,7 +489,7 @@ function Library:CreateWindow(Config)
             arrow.Text = "▼"
 
             local dropFrame = Instance.new("Frame", scrollFrame)
-            dropFrame.LayoutOrder = orderBase + 1 -- Ensure it is always exactly below the button
+            dropFrame.LayoutOrder = orderBase + 1 
             dropFrame.Size = UDim2.new(1, -10, 0, 0)
             dropFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
             dropFrame.ClipsDescendants = true
