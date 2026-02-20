@@ -1,23 +1,4 @@
 --// MessyHub UI Library (Visual Upgrade + New Elements)
---//
---// Visual Changes:
---//   - Title bar gradient accent line separator
---//   - Sidebar active tab pill highlight with left accent strip
---//   - Sidebar UIGradient purple tint
---//   - Buttons have real backgrounds with hover/click tweens
---//   - Group boxes (CreateSection) to wrap content
---//   - Thicker slider track (8px) + larger knob (16px)
---//   - Animated window open/close scale tween
---//   - Animated toggle switch (pill style)
---//   - Richer notifications with progress bar
---//   - Controls GUI redesigned as icon bar
---//
---// New Elements:
---//   - CreateSection(title)          → collapsible group box
---//   - CreateColorPicker(label, def, cb) → RGB sliders color picker
---//   - CreateKeybind(label, def, cb) → click-to-bind keybind button
---//   - CreateProgressBar(label, val) → read-only progress display
---//   - Window:SetTheme(color)        → change accent color live
 
 local Library = {}
 
