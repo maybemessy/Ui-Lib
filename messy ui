@@ -37,7 +37,6 @@ function Library:CreateWindow(Config)
         screenGui.Parent = CoreGui
     end
 
-    -- [Notification System and Main Frame sections remain identical]
     local notifContainer = Instance.new("Frame", screenGui)
     notifContainer.Name = "NotifContainer"
     notifContainer.Size = UDim2.new(0, 250, 1, -20)
@@ -59,9 +58,10 @@ function Library:CreateWindow(Config)
     main.Active = true
     main.Draggable = true
     main.Visible = not useKeySystem 
+    main.SelectionGroup = true -- Fix: Set group
+    main.SelectionImageObject = EmptySelection -- Fix: Hide outline
     Instance.new("UICorner", main).CornerRadius = UDim.new(0, 8)
 
-    -- [Controls, FPS, and Key System logic remain same]
     local controlsGui = Instance.new("Frame", screenGui)
     controlsGui.Size = UDim2.new(0, 100, 0, 50)
     controlsGui.Position = UDim2.new(1, -110, 0, 25)
@@ -77,7 +77,7 @@ function Library:CreateWindow(Config)
     toggleButton.Font = Enum.Font.Code
     toggleButton.Text = "Toggle"
     toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-    toggleButton.SelectionImageObject = EmptySelection -- Fix applied
+    toggleButton.SelectionImageObject = EmptySelection
 
     local lockButton = Instance.new("TextButton", controlsGui)
     lockButton.Size = UDim2.new(0.5, 0, 1, 0)
@@ -86,7 +86,7 @@ function Library:CreateWindow(Config)
     lockButton.Font = Enum.Font.Code
     lockButton.Text = "Lock"
     lockButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-    lockButton.SelectionImageObject = EmptySelection -- Fix applied
+    lockButton.SelectionImageObject = EmptySelection
 
     local isVisible = true
     toggleButton.MouseButton1Click:Connect(function()
@@ -119,7 +119,7 @@ function Library:CreateWindow(Config)
     closeButton.Font = Enum.Font.Code
     closeButton.Text = "X"
     closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-    closeButton.SelectionImageObject = EmptySelection -- Fix applied
+    closeButton.SelectionImageObject = EmptySelection
     closeButton.MouseButton1Click:Connect(function() screenGui:Destroy() end)
 
     local frameCount = 0
@@ -132,89 +132,6 @@ function Library:CreateWindow(Config)
             lastTime = os.clock()
         end
     end)
-
-    if useKeySystem then
-        local fetchedKey = string.match(game:HttpGet(keyUrl), "^%s*(.-)%s*$")
-        local keyFrame = Instance.new("Frame", screenGui)
-        keyFrame.Size = UDim2.new(0, 300, 0, 160)
-        keyFrame.Position = UDim2.new(0.5, -150, 0.5, -80)
-        keyFrame.BackgroundColor3 = Color3.new(0, 0, 0)
-        Instance.new("UICorner", keyFrame).CornerRadius = UDim.new(0, 12)
-
-        local keyTitle = Instance.new("TextLabel", keyFrame)
-        keyTitle.Size = UDim2.new(1, 0, 0, 30)
-        keyTitle.Text = hubName .. " Key System"
-        keyTitle.TextColor3 = Color3.new(1, 1, 1)
-        keyTitle.BackgroundTransparency = 1
-        keyTitle.Font = Enum.Font.Code
-        keyTitle.TextSize = 20
-
-        local keyInput = Instance.new("TextBox", keyFrame)
-        keyInput.Size = UDim2.new(0.8, 0, 0, 30)
-        keyInput.Position = UDim2.new(0.1, 0, 0.4, -15)
-        keyInput.PlaceholderText = "Enter key here"
-        keyInput.Font = Enum.Font.Code
-        keyInput.TextSize = 18
-        keyInput.TextColor3 = Color3.new(1, 1, 1)
-        keyInput.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-        Instance.new("UICorner", keyInput).CornerRadius = UDim.new(0, 8)
-
-        local submitButton = Instance.new("TextButton", keyFrame)
-        submitButton.Size = UDim2.new(0.5, 0, 0, 30)
-        submitButton.Position = UDim2.new(0, 0, 0.75, 0)
-        submitButton.Text = "Submit"
-        submitButton.Font = Enum.Font.Code
-        submitButton.TextSize = 18
-        submitButton.TextColor3 = Color3.new(1, 1, 1)
-        submitButton.BackgroundTransparency = 1
-        submitButton.SelectionImageObject = EmptySelection
-
-        local getKeyButton = Instance.new("TextButton", keyFrame)
-        getKeyButton.Size = UDim2.new(0.5, 0, 0, 30)
-        getKeyButton.Position = UDim2.new(0.5, 0, 0.75, 0)
-        getKeyButton.Text = "Get Key"
-        getKeyButton.Font = Enum.Font.Code
-        getKeyButton.TextSize = 18
-        getKeyButton.TextColor3 = Color3.new(1, 1, 1)
-        getKeyButton.BackgroundTransparency = 1
-        getKeyButton.SelectionImageObject = EmptySelection
-
-        submitButton.MouseButton1Click:Connect(function()
-            if keyInput.Text == fetchedKey then
-                keyFrame:Destroy()
-                main.Visible = true
-                controlsGui.Visible = true
-            else
-                keyTitle.Text = "Invalid Key!"
-                keyTitle.TextColor3 = Color3.fromRGB(255, 0, 0)
-            end
-        end)
-
-        getKeyButton.MouseButton1Click:Connect(function()
-            setclipboard(getUrl)
-            keyTitle.Text = "Link Copied!"
-            keyTitle.TextColor3 = Color3.fromRGB(0, 200, 255)
-        end)
-    end
-
-    local tabContainer = Instance.new("Frame", main)
-    tabContainer.Size = UDim2.new(0, 150, 1, -25)
-    tabContainer.Position = UDim2.new(0, 0, 0, 25)
-    tabContainer.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
-    tabContainer.BorderSizePixel = 0
-
-    local tabListHolder = Instance.new("Frame", tabContainer)
-    tabListHolder.Size = UDim2.new(1, 0, 1, -25)
-    tabListHolder.BackgroundTransparency = 1
-    local tabLayout = Instance.new("UIListLayout", tabListHolder)
-    tabLayout.Padding = UDim.new(0, 2)
-
-    local contentContainer = Instance.new("Frame", main)
-    contentContainer.Size = UDim2.new(1, -150, 1, -25)
-    contentContainer.Position = UDim2.new(0, 150, 0, 25)
-    contentContainer.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
-    contentContainer.BorderSizePixel = 0
-    contentContainer.ClipsDescendants = true
 
     local Window = { lastSelectedTabBtn = nil }
 
@@ -264,6 +181,91 @@ function Library:CreateWindow(Config)
         end)
     end
 
+    if useKeySystem then
+        local fetchedKey = string.match(game:HttpGet(keyUrl), "^%s*(.-)%s*$")
+        local keyFrame = Instance.new("Frame", screenGui)
+        keyFrame.Size = UDim2.new(0, 300, 0, 160)
+        keyFrame.Position = UDim2.new(0.5, -150, 0.5, -80)
+        keyFrame.BackgroundColor3 = Color3.new(0, 0, 0)
+        keyFrame.SelectionGroup = true -- Fix: Set group
+        keyFrame.SelectionImageObject = EmptySelection -- Fix: Hide outline
+        Instance.new("UICorner", keyFrame).CornerRadius = UDim.new(0, 12)
+
+        local keyTitle = Instance.new("TextLabel", keyFrame)
+        keyTitle.Size = UDim2.new(1, 0, 0, 30)
+        keyTitle.Text = hubName .. " Key System"
+        keyTitle.TextColor3 = Color3.new(1, 1, 1)
+        keyTitle.BackgroundTransparency = 1
+        keyTitle.Font = Enum.Font.Code
+        keyTitle.TextSize = 20
+
+        local keyInput = Instance.new("TextBox", keyFrame)
+        keyInput.Size = UDim2.new(0.8, 0, 0, 30)
+        keyInput.Position = UDim2.new(0.1, 0, 0.4, -15)
+        keyInput.PlaceholderText = "Enter key here"
+        keyInput.Font = Enum.Font.Code
+        keyInput.TextSize = 18
+        keyInput.TextColor3 = Color3.new(1, 1, 1)
+        keyInput.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+        keyInput.SelectionImageObject = EmptySelection
+        Instance.new("UICorner", keyInput).CornerRadius = UDim.new(0, 8)
+
+        local submitButton = Instance.new("TextButton", keyFrame)
+        submitButton.Size = UDim2.new(0.5, 0, 0, 30)
+        submitButton.Position = UDim2.new(0, 0, 0.75, 0)
+        submitButton.Text = "Submit"
+        submitButton.Font = Enum.Font.Code
+        submitButton.TextSize = 18
+        submitButton.TextColor3 = Color3.new(1, 1, 1)
+        submitButton.BackgroundTransparency = 1
+        submitButton.SelectionImageObject = EmptySelection
+
+        local getKeyButton = Instance.new("TextButton", keyFrame)
+        getKeyButton.Size = UDim2.new(0.5, 0, 0, 30)
+        getKeyButton.Position = UDim2.new(0.5, 0, 0.75, 0)
+        getKeyButton.Text = "Get Key"
+        getKeyButton.Font = Enum.Font.Code
+        getKeyButton.TextSize = 18
+        getKeyButton.TextColor3 = Color3.new(1, 1, 1)
+        getKeyButton.BackgroundTransparency = 1
+        getKeyButton.SelectionImageObject = EmptySelection
+
+        submitButton.MouseButton1Click:Connect(function()
+            if keyInput.Text == fetchedKey then
+                Window:Notify("Success", "Correct key! Loading...", 3)
+                keyFrame:Destroy()
+                main.Visible = true
+                controlsGui.Visible = true
+            else
+                Window:Notify("Error", "The key you entered is incorrect.", 3)
+            end
+        end)
+
+        getKeyButton.MouseButton1Click:Connect(function()
+            setclipboard(getUrl)
+            Window:Notify("System", "Key link copied to clipboard!", 3)
+        end)
+    end
+
+    local tabContainer = Instance.new("Frame", main)
+    tabContainer.Size = UDim2.new(0, 150, 1, -25)
+    tabContainer.Position = UDim2.new(0, 0, 0, 25)
+    tabContainer.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+    tabContainer.BorderSizePixel = 0
+
+    local tabListHolder = Instance.new("Frame", tabContainer)
+    tabListHolder.Size = UDim2.new(1, 0, 1, -25)
+    tabListHolder.BackgroundTransparency = 1
+    local tabLayout = Instance.new("UIListLayout", tabListHolder)
+    tabLayout.Padding = UDim.new(0, 2)
+
+    local contentContainer = Instance.new("Frame", main)
+    contentContainer.Size = UDim2.new(1, -150, 1, -25)
+    contentContainer.Position = UDim2.new(0, 150, 0, 25)
+    contentContainer.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+    contentContainer.BorderSizePixel = 0
+    contentContainer.ClipsDescendants = true
+
     function Window:CreateTab(name)
         local tabBtn = Instance.new("TextButton", tabListHolder)
         tabBtn.Size = UDim2.new(1, 0, 0, 30)
@@ -303,7 +305,7 @@ function Library:CreateWindow(Config)
             btn.TextColor3 = Color3.fromRGB(255, 255, 255)
             btn.Font = Enum.Font.GothamSemibold
             btn.Text = "[ " .. text .. " ]"
-            btn.SelectionImageObject = EmptySelection -- Fix applied
+            btn.SelectionImageObject = EmptySelection
             btn.MouseButton1Click:Connect(function() pcall(callback) end)
         end
 
@@ -320,7 +322,7 @@ function Library:CreateWindow(Config)
             btn.TextColor3 = Color3.new(1,1,1)
             btn.TextXAlignment = Enum.TextXAlignment.Left
             btn.Text = (state and "[x] " or "[ ] ") .. text
-            btn.SelectionImageObject = EmptySelection -- Fix applied
+            btn.SelectionImageObject = EmptySelection
 
             btn.MouseButton1Click:Connect(function()
                 state = not state
@@ -339,7 +341,7 @@ function Library:CreateWindow(Config)
             btn.Font = Enum.Font.Code
             btn.TextColor3 = Color3.fromRGB(200, 200, 200)
             btn.Text = label
-            btn.SelectionImageObject = EmptySelection -- Fix applied
+            btn.SelectionImageObject = EmptySelection
             Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
 
             local arrow = Instance.new("TextLabel", btn)
@@ -376,7 +378,7 @@ function Library:CreateWindow(Config)
                 oBtn.TextColor3 = Color3.new(1,1,1)
                 oBtn.Text = opt
                 oBtn.Font = Enum.Font.Code
-                oBtn.SelectionImageObject = EmptySelection -- Fix applied
+                oBtn.SelectionImageObject = EmptySelection
                 oBtn.MouseButton1Click:Connect(function()
                     btn.Text = opt
                     isOpen = false
