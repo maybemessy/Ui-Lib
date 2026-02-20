@@ -1,22 +1,31 @@
---// Reusable UI Library
+--// MessyHub UI Library Optimized
 local Library = {}
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
-local LocalPlayer = Players.LocalPlayer
+local CoreGui = game:GetService("CoreGui")
 
-function Library:CreateWindow(titleText)
+function Library:CreateWindow(hubName)
+    local hubName = hubName or "MessyHub"
     local screenGui = Instance.new("ScreenGui")
     screenGui.Name = " "
     screenGui.ResetOnSpawn = false
-    screenGui.DisplayOrder = 999999
+    screenGui.IgnoreGuiInset = true
+    screenGui.DisplayOrder = 99999999
     
-    -- Hidden UI Protection
-    if gethui then screenGui.Parent = gethui()
-    elseif (syn and syn.protect_gui) then syn.protect_gui(screenGui); screenGui.Parent = game:GetService("CoreGui")
-    else screenGui.Parent = game:GetService("CoreGui") end
+    -- Advanced hiding (executor-dependent)
+    if gethui then
+        screenGui.Parent = gethui()
+    elseif (syn and syn.protect_gui) then
+        syn.protect_gui(screenGui)
+        screenGui.Parent = CoreGui
+    else
+        screenGui.Parent = CoreGui
+    end
 
-    -- Main Window
+    -- Main Frame
     local main = Instance.new("Frame", screenGui)
     main.Size = UDim2.new(0, 600, 0, 350)
     main.Position = UDim2.new(0.5, -300, 0.5, -175)
@@ -24,30 +33,66 @@ function Library:CreateWindow(titleText)
     main.BorderSizePixel = 0
     main.Active = true
     main.Draggable = true
+    main.Visible = true -- You can set this to false if using your key system
 
     -- Title Bar
     local title = Instance.new("TextLabel", main)
     title.Size = UDim2.new(1, 0, 0, 25)
     title.Position = UDim2.new(0, 5, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = titleText .. " | FPS: 0"
+    title.Text = hubName .. " | FPS: 0"
     title.Font = Enum.Font.Code
+    title.TextSize = 16
     title.TextColor3 = Color3.new(1, 1, 1)
     title.TextXAlignment = Enum.TextXAlignment.Left
 
-    -- FPS Logic
+    -- FPS Counter Optimization (Updates once per second)
     local frameCount = 0
-    local lastTime = tick()
-    RunService.Heartbeat:Connect(function()
+    local lastTime = os.clock()
+    RunService.RenderStepped:Connect(function()
         frameCount = frameCount + 1
-        if tick() - lastTime >= 1 then
-            title.Text = titleText .. " | FPS: " .. tostring(frameCount)
+        if os.clock() - lastTime >= 1 then
+            title.Text = hubName .. " | FPS: " .. tostring(frameCount)
             frameCount = 0
-            lastTime = tick()
+            lastTime = os.clock()
         end
     end)
 
-    -- Container for Tabs
+    -- Controls (Toggle/Lock)
+    local controlsGui = Instance.new("Frame", screenGui)
+    controlsGui.Size = UDim2.new(0, 100, 0, 40)
+    controlsGui.Position = UDim2.new(1, -110, 0, 25)
+    controlsGui.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    controlsGui.BackgroundTransparency = 0.5
+    controlsGui.Draggable = true
+    Instance.new("UICorner", controlsGui).CornerRadius = UDim.new(0, 8)
+
+    local toggleButton = Instance.new("TextButton", controlsGui)
+    toggleButton.Size = UDim2.new(0.5, 0, 1, 0)
+    toggleButton.BackgroundTransparency = 1
+    toggleButton.Text = "Hide"
+    toggleButton.TextColor3 = Color3.new(1,1,1)
+    toggleButton.Font = Enum.Font.Code
+
+    local lockButton = Instance.new("TextButton", controlsGui)
+    lockButton.Size = UDim2.new(0.5, 0, 1, 0)
+    lockButton.Position = UDim2.new(0.5, 0, 0, 0)
+    lockButton.BackgroundTransparency = 1
+    lockButton.Text = "Lock"
+    lockButton.TextColor3 = Color3.new(1,1,1)
+    lockButton.Font = Enum.Font.Code
+
+    toggleButton.MouseButton1Click:Connect(function()
+        main.Visible = not main.Visible
+        toggleButton.Text = main.Visible and "Hide" or "Show"
+    end)
+
+    lockButton.MouseButton1Click:Connect(function()
+        main.Draggable = not main.Draggable
+        lockButton.Text = main.Draggable and "Lock" or "Unlock"
+    end)
+
+    -- Side Tabs
     local tabContainer = Instance.new("Frame", main)
     tabContainer.Size = UDim2.new(0, 150, 1, -25)
     tabContainer.Position = UDim2.new(0, 0, 0, 25)
@@ -57,7 +102,8 @@ function Library:CreateWindow(titleText)
     local tabListHolder = Instance.new("Frame", tabContainer)
     tabListHolder.Size = UDim2.new(1, 0, 1, -25)
     tabListHolder.BackgroundTransparency = 1
-    Instance.new("UIListLayout", tabListHolder).Padding = UDim.new(0, 2)
+    local tabLayout = Instance.new("UIListLayout", tabListHolder)
+    tabLayout.Padding = UDim.new(0, 2)
 
     -- Content Area
     local content = Instance.new("ScrollingFrame", main)
@@ -65,10 +111,11 @@ function Library:CreateWindow(titleText)
     content.Position = UDim2.new(0, 150, 0, 25)
     content.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
     content.BorderSizePixel = 0
-    content.AutomaticCanvasSize = Enum.AutomaticSize.Y
     content.ScrollBarThickness = 6
-    local layout = Instance.new("UIListLayout", content)
-    layout.Padding = UDim.new(0, 6)
+    content.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    
+    local contentLayout = Instance.new("UIListLayout", content)
+    contentLayout.Padding = UDim.new(0, 6)
     Instance.new("UIPadding", content).PaddingLeft = UDim.new(0, 5)
 
     local Window = { lastSelectedTab = nil }
@@ -78,18 +125,26 @@ function Library:CreateWindow(titleText)
         tabBtn.Size = UDim2.new(1, 0, 0, 30)
         tabBtn.BackgroundTransparency = 1
         tabBtn.Text = name
-        tabBtn.Font = Enum.Font.Code
         tabBtn.TextColor3 = Color3.new(1, 1, 1)
+        tabBtn.Font = Enum.Font.Code
 
         local tabContent = Instance.new("Frame", content)
         tabContent.Size = UDim2.new(1, 0, 1, 0)
         tabContent.BackgroundTransparency = 1
         tabContent.Visible = false
-        Instance.new("UIListLayout", tabContent).Padding = UDim.new(0, 6)
+        local tabInnerLayout = Instance.new("UIListLayout", tabContent)
+        tabInnerLayout.Padding = UDim.new(0, 6)
 
         tabBtn.MouseButton1Click:Connect(function()
-            for _, v in pairs(content:GetChildren()) do if v:IsA("Frame") then v.Visible = false end end
+            if Window.lastSelectedTab then
+                Window.lastSelectedTab.TextColor3 = Color3.new(1, 1, 1)
+            end
+            for _, v in pairs(content:GetChildren()) do
+                if v:IsA("Frame") then v.Visible = false end
+            end
             tabContent.Visible = true
+            tabBtn.TextColor3 = Color3.fromRGB(255, 0, 255) -- Glow effect
+            Window.lastSelectedTab = tabBtn
         end)
 
         local Tab = {}
@@ -97,22 +152,23 @@ function Library:CreateWindow(titleText)
         function Tab:CreateButton(text, callback)
             local btn = Instance.new("TextButton", tabContent)
             btn.Size = UDim2.new(0.95, 0, 0, 30)
-            btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+            btn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
             btn.Text = "[ " .. text .. " ]"
             btn.TextColor3 = Color3.new(1, 1, 1)
             btn.Font = Enum.Font.Code
+            Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
             btn.MouseButton1Click:Connect(callback)
             return btn
         end
 
-        function Tab:CreateToggle(text, callback)
-            local state = false
+        function Tab:CreateToggle(text, default, callback)
+            local state = default or false
             local btn = Instance.new("TextButton", tabContent)
             btn.Size = UDim2.new(0.95, 0, 0, 25)
             btn.BackgroundTransparency = 1
-            btn.Text = "[ ] " .. text
-            btn.Font = Enum.Font.Code
+            btn.Text = (state and "[x] " or "[ ] ") .. text
             btn.TextColor3 = Color3.new(1, 1, 1)
+            btn.Font = Enum.Font.Code
             btn.TextXAlignment = Enum.TextXAlignment.Left
 
             btn.MouseButton1Click:Connect(function()
@@ -120,6 +176,33 @@ function Library:CreateWindow(titleText)
                 btn.Text = (state and "[x] " or "[ ] ") .. text
                 callback(state)
             end)
+        end
+
+        function Tab:CreateSlider(labelText, min, max, default, callback)
+            -- Simplified slider logic for the library
+            local container = Instance.new("Frame", tabContent)
+            container.Size = UDim2.new(0.95, 0, 0, 40)
+            container.BackgroundTransparency = 1
+            
+            local label = Instance.new("TextLabel", container)
+            label.Size = UDim2.new(1, 0, 0, 20)
+            label.Text = labelText .. ": " .. default
+            label.TextColor3 = Color3.new(1,1,1)
+            label.BackgroundTransparency = 1
+            label.Font = Enum.Font.Code
+            label.TextXAlignment = Enum.TextXAlignment.Left
+
+            local bar = Instance.new("Frame", container)
+            bar.Size = UDim2.new(1, 0, 0, 6)
+            bar.Position = UDim2.new(0, 0, 0, 25)
+            bar.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+            
+            local fill = Instance.new("Frame", bar)
+            fill.Size = UDim2.new((default-min)/(max-min), 0, 1, 0)
+            fill.BackgroundColor3 = Color3.fromRGB(155, 105, 255)
+
+            -- Drag logic would go here
+            return container
         end
 
         return Tab
