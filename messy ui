@@ -459,96 +459,109 @@ function Library:CreateWindow(Config)
             end)
         end
 
-        --// Dropdown
-        function TabElements:CreateDropdown(label, options, callback)
-            local btn = Instance.new("TextButton", scrollFrame)
-            btn.Size = UDim2.new(1, -10, 0, 30)
-            btn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-            btn.Font = Enum.Font.Code
-            btn.TextSize = 14
-            btn.TextColor3 = Color3.fromRGB(200, 200, 200)
-            btn.Text = label
-            Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+--// Dropdown
+function TabElements:CreateDropdown(label, options, callback)
+    -- Create a unique order ID based on current children count to keep them paired
+    local orderBase = #scrollFrame:GetChildren() * 2 
 
-            local arrow = Instance.new("TextLabel", btn)
-            arrow.Size = UDim2.new(0, 20, 1, 0)
-            arrow.Position = UDim2.new(1, -25, 0, 0)
-            arrow.BackgroundTransparency = 1
-            arrow.TextColor3 = Color3.fromRGB(220, 220, 220)
+    local btn = Instance.new("TextButton", scrollFrame)
+    btn.LayoutOrder = orderBase -- Set button order
+    btn.Size = UDim2.new(1, -10, 0, 30)
+    btn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    btn.Font = Enum.Font.Code
+    btn.TextSize = 14
+    btn.TextColor3 = Color3.fromRGB(200, 200, 200)
+    btn.Text = label
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+
+    local arrow = Instance.new("TextLabel", btn)
+    arrow.Size = UDim2.new(0, 20, 1, 0)
+    arrow.Position = UDim2.new(1, -25, 0, 0)
+    arrow.BackgroundTransparency = 1
+    arrow.TextColor3 = Color3.fromRGB(220, 220, 220)
+    arrow.Text = "▼"
+
+    local dropFrame = Instance.new("Frame", scrollFrame)
+    dropFrame.LayoutOrder = orderBase + 1 -- Ensure it is always exactly below the button
+    dropFrame.Size = UDim2.new(1, -10, 0, 0)
+    dropFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    dropFrame.ClipsDescendants = true
+    dropFrame.Visible = false
+    Instance.new("UICorner", dropFrame).CornerRadius = UDim.new(0, 6)
+
+    local search = Instance.new("TextBox", dropFrame)
+    search.Size = UDim2.new(1, -10, 0, 25)
+    search.Position = UDim2.new(0, 5, 0, 0)
+    search.PlaceholderText = "Search..."
+    search.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    search.TextColor3 = Color3.new(1,1,1)
+    search.Font = Enum.Font.Code
+
+    local scroll = Instance.new("ScrollingFrame", dropFrame)
+    scroll.Size = UDim2.new(1, 0, 1, -30)
+    scroll.Position = UDim2.new(0, 0, 0, 30)
+    scroll.BackgroundTransparency = 1
+    scroll.ScrollBarThickness = 4
+    scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    
+    local dLayout = Instance.new("UIListLayout", scroll)
+    dLayout.Padding = UDim.new(0, 2)
+    dLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+    local isOpen = false
+    local btns = {}
+
+    for _, opt in ipairs(options) do
+        local oBtn = Instance.new("TextButton", scroll)
+        oBtn.Size = UDim2.new(1, -10, 0, 25)
+        oBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        oBtn.TextColor3 = Color3.new(1,1,1)
+        oBtn.Text = opt
+        oBtn.Font = Enum.Font.Code
+        oBtn.MouseButton1Click:Connect(function()
+            btn.Text = opt
+            isOpen = false
             arrow.Text = "▼"
-
-            local dropFrame = Instance.new("Frame", scrollFrame)
-            dropFrame.Size = UDim2.new(1, -10, 0, 0)
-            dropFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-            dropFrame.ClipsDescendants = true
+            TweenService:Create(dropFrame, TweenInfo.new(0.2), {Size = UDim2.new(1, -10, 0, 0)}):Play()
+            task.wait(0.2)
             dropFrame.Visible = false
-            Instance.new("UICorner", dropFrame).CornerRadius = UDim.new(0, 6)
+            pcall(callback, opt)
+        end)
+        table.insert(btns, oBtn)
+    end
 
-            local search = Instance.new("TextBox", dropFrame)
-            search.Size = UDim2.new(1, -10, 0, 25)
-            search.Position = UDim2.new(0, 5, 0, 0)
-            search.PlaceholderText = "Search..."
-            search.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-            search.TextColor3 = Color3.new(1,1,1)
-            search.Font = Enum.Font.Code
-
-            local scroll = Instance.new("ScrollingFrame", dropFrame)
-            scroll.Size = UDim2.new(1, 0, 1, -30)
-            scroll.Position = UDim2.new(0, 0, 0, 30)
-            scroll.BackgroundTransparency = 1
-            scroll.ScrollBarThickness = 4
-            local dLayout = Instance.new("UIListLayout", scroll)
-            dLayout.Padding = UDim.new(0, 2)
-
-            local isOpen = false
-            local btns = {}
-
-            for _, opt in ipairs(options) do
-                local oBtn = Instance.new("TextButton", scroll)
-                oBtn.Size = UDim2.new(1, -10, 0, 25)
-                oBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-                oBtn.TextColor3 = Color3.new(1,1,1)
-                oBtn.Text = opt
-                oBtn.Font = Enum.Font.Code
-                oBtn.MouseButton1Click:Connect(function()
-                    btn.Text = opt
-                    isOpen = false
-                    dropFrame.Visible = false
-                    arrow.Text = "▼"
-                    pcall(callback, opt)
-                end)
-                table.insert(btns, oBtn)
-            end
-
-            search.Changed:Connect(function(p)
-                if p == "Text" then
-                    local txt = search.Text:lower()
-                    local visCount = 0
-                    for _, b in ipairs(btns) do
-                        if string.find(b.Text:lower(), txt, 1, true) then
-                            b.Visible = true
-                            visCount = visCount + 1
-                        else
-                            b.Visible = false
-                        end
-                    end
-                    scroll.CanvasSize = UDim2.new(0, 0, 0, visCount * 27)
-                end
-            end)
-
-            btn.MouseButton1Click:Connect(function()
-                isOpen = not isOpen
-                arrow.Text = isOpen and "▲" or "▼"
-                dropFrame.Visible = isOpen
-                if isOpen then
-                    scroll.CanvasSize = UDim2.new(0, 0, 0, #btns * 27)
-                    TweenService:Create(dropFrame, TweenInfo.new(0.2), {Size = UDim2.new(1, -10, 0, math.min(#btns * 27 + 35, 150))}):Play()
+    search.Changed:Connect(function(p)
+        if p == "Text" then
+            local txt = search.Text:lower()
+            local visCount = 0
+            for _, b in ipairs(btns) do
+                if string.find(b.Text:lower(), txt, 1, true) then
+                    b.Visible = true
+                    visCount = visCount + 1
                 else
-                    TweenService:Create(dropFrame, TweenInfo.new(0.2), {Size = UDim2.new(1, -10, 0, 0)}):Play()
+                    b.Visible = false
                 end
-            end)
+            end
+            scroll.CanvasSize = UDim2.new(0, 0, 0, visCount * 27)
         end
+    end)
 
+    btn.MouseButton1Click:Connect(function()
+        isOpen = not isOpen
+        arrow.Text = isOpen and "▲" or "▼"
+        
+        if isOpen then
+            dropFrame.Visible = true
+            scroll.CanvasSize = UDim2.new(0, 0, 0, #btns * 27)
+            TweenService:Create(dropFrame, TweenInfo.new(0.2), {Size = UDim2.new(1, -10, 0, math.min(#btns * 27 + 35, 150))}):Play()
+        else
+            local anim = TweenService:Create(dropFrame, TweenInfo.new(0.2), {Size = UDim2.new(1, -10, 0, 0)})
+            anim:Play()
+            anim.Completed:Wait()
+            if not isOpen then dropFrame.Visible = false end
+        end
+    end)
+end
         return TabElements
     end
 
