@@ -46,10 +46,20 @@ function Library:CreateWindow(Config)
     notifLayout.SortOrder = Enum.SortOrder.LayoutOrder
     notifLayout.Padding = UDim.new(0, 8)
 
-    --// Window Object (Defined early for access)
+    --// Main Frame
+    local main = Instance.new("Frame", screenGui)
+    main.Size = UDim2.new(0, 600, 0, 350)
+    main.Position = UDim2.new(0.5, -300, 0.5, -175)
+    main.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    main.BorderSizePixel = 0
+    main.Active = true
+    main.Draggable = true
+    main.Visible = not useKeySystem 
+    Instance.new("UICorner", main).CornerRadius = UDim.new(0, 8)
+
+    --// Global Notification Function (Moved up for Key System access)
     local Window = { lastSelectedTabBtn = nil }
 
-    --// Global Notification Function
     function Window:Notify(titleText, contentText, duration)
         local duration = duration or 3
         
@@ -91,13 +101,11 @@ function Library:CreateWindow(Config)
         nContent.TextYAlignment = Enum.TextYAlignment.Top
         nContent.TextTransparency = 1
 
-        -- Fade In
         TweenService:Create(notification, TweenInfo.new(0.3), {BackgroundTransparency = 0.1}):Play()
         TweenService:Create(border, TweenInfo.new(0.3), {BackgroundTransparency = 0}):Play()
         TweenService:Create(nTitle, TweenInfo.new(0.3), {TextTransparency = 0}):Play()
         TweenService:Create(nContent, TweenInfo.new(0.3), {TextTransparency = 0}):Play()
 
-        -- Fade Out & Cleanup
         task.delay(duration, function()
             local fadeOut = TweenService:Create(notification, TweenInfo.new(0.4), {BackgroundTransparency = 1})
             TweenService:Create(border, TweenInfo.new(0.4), {BackgroundTransparency = 1}):Play()
@@ -109,18 +117,7 @@ function Library:CreateWindow(Config)
         end)
     end
 
-    --// Main Frame
-    local main = Instance.new("Frame", screenGui)
-    main.Size = UDim2.new(0, 600, 0, 350)
-    main.Position = UDim2.new(0.5, -300, 0.5, -175)
-    main.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-    main.BorderSizePixel = 0
-    main.Active = true
-    main.Draggable = true
-    main.Visible = not useKeySystem 
-    Instance.new("UICorner", main).CornerRadius = UDim.new(0, 8)
-
-    --// Controls GUI (Toggle & Lock)
+    --// Controls GUI
     local controlsGui = Instance.new("Frame", screenGui)
     controlsGui.Size = UDim2.new(0, 100, 0, 50)
     controlsGui.Position = UDim2.new(1, -110, 0, 25)
@@ -190,7 +187,7 @@ function Library:CreateWindow(Config)
         end
     end)
 
-    --// Key System Logic
+    --// Key System Logic (Modified to use Notify)
     if useKeySystem then
         local fetchedKey = string.match(game:HttpGet(keyUrl), "^%s*(.-)%s*$")
         local keyFrame = Instance.new("Frame", screenGui)
@@ -237,20 +234,18 @@ function Library:CreateWindow(Config)
 
         submitButton.MouseButton1Click:Connect(function()
             if keyInput.Text == fetchedKey then
-                Window:Notify("Access Granted", "Welcome to " .. hubName .. "!", 4)
-                task.wait(0.5)
                 keyFrame:Destroy()
                 main.Visible = true
                 controlsGui.Visible = true
+                Window:Notify("System", "Key Accepted! Welcome.", 3)
             else
-                Window:Notify("Access Denied", "Invalid key. Please try again.", 3)
-                keyInput.Text = ""
+                Window:Notify("Security", "Invalid key entered. Please try again.", 4)
             end
         end)
 
         getKeyButton.MouseButton1Click:Connect(function()
             setclipboard(getUrl)
-            Window:Notify("System", "Key link copied to clipboard!", 3)
+            Window:Notify("Clipboard", "Key link copied successfully!", 3)
         end)
     end
 
@@ -339,7 +334,6 @@ function Library:CreateWindow(Config)
 
         local TabElements = {}
 
-        -- Element methods (CreateLabel, CreateButton, etc.) go here...
         function TabElements:CreateLabel(text)
             local label = Instance.new("TextLabel", scrollFrame)
             label.LayoutOrder = #scrollFrame:GetChildren() * 2
@@ -388,8 +382,83 @@ function Library:CreateWindow(Config)
             end)
         end
 
+        function TabElements:CreateInput(placeholder, defaultText, callback)
+            local input = Instance.new("TextBox", scrollFrame)
+            input.LayoutOrder = #scrollFrame:GetChildren() * 2
+            input.Size = UDim2.new(1, -10, 0, 25)
+            input.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+            input.BorderSizePixel = 0
+            input.Font = Enum.Font.Code
+            input.TextSize = 14
+            input.TextColor3 = Color3.new(1, 1, 1)
+            input.PlaceholderText = placeholder
+            input.Text = defaultText or ""
+            Instance.new("UICorner", input).CornerRadius = UDim.new(0, 4)
+
+            input.FocusLost:Connect(function(enterPressed)
+                if enterPressed then pcall(callback, input.Text) end
+            end)
+        end
+
+        function TabElements:CreateSlider(labelText, minValue, maxValue, defaultValue, callback)
+            local container = Instance.new("Frame", scrollFrame)
+            container.LayoutOrder = #scrollFrame:GetChildren() * 2
+            container.Size = UDim2.new(1, -10, 0, 40)
+            container.BackgroundTransparency = 1
+
+            local label = Instance.new("TextLabel", container)
+            label.Size = UDim2.new(1, 0, 0, 20)
+            label.BackgroundTransparency = 1
+            label.Font = Enum.Font.Code
+            label.TextSize = 14
+            label.TextColor3 = Color3.new(1, 1, 1)
+            label.TextXAlignment = Enum.TextXAlignment.Left
+            label.Text = labelText .. ": " .. defaultValue
+
+            local numBox = Instance.new("TextBox", container)
+            numBox.Size = UDim2.new(0, 30, 0, 20)
+            numBox.Position = UDim2.new(1, -30, 0, 0)
+            numBox.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+            numBox.TextColor3 = Color3.new(1, 1, 1)
+            numBox.BorderSizePixel = 0
+            numBox.Font = Enum.Font.Code
+            numBox.Text = tostring(defaultValue)
+            Instance.new("UICorner", numBox).CornerRadius = UDim.new(0, 5)
+
+            local slider = Instance.new("Frame", container)
+            slider.Size = UDim2.new(1, 0, 0, 6)
+            slider.Position = UDim2.new(0, 0, 0, 25)
+            slider.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+            Instance.new("UICorner", slider).CornerRadius = UDim.new(0, 3)
+
+            local fill = Instance.new("Frame", slider)
+            fill.BackgroundColor3 = Color3.fromRGB(155, 105, 255)
+            fill.Size = UDim2.new((defaultValue - minValue) / (maxValue - minValue), 0, 1, 0)
+            
+            local knob = Instance.new("Frame", slider)
+            knob.Size = UDim2.new(0, 12, 0, 12)
+            knob.AnchorPoint = Vector2.new(0.5, 0.5)
+            knob.Position = UDim2.new((defaultValue - minValue) / (maxValue - minValue), 0, 0.5, 0)
+            knob.BackgroundColor3 = Color3.fromRGB(200, 200, 255)
+            Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+            local dragging = false
+            slider.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true end end)
+            UserInputService.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end)
+            UserInputService.InputChanged:Connect(function(i)
+                if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+                    local ratio = math.clamp((i.Position.X - slider.AbsolutePosition.X) / slider.AbsoluteSize.X, 0, 1)
+                    local val = math.floor(minValue + (maxValue - minValue) * ratio + 0.5)
+                    fill.Size = UDim2.new(ratio, 0, 1, 0)
+                    knob.Position = UDim2.new(ratio, 0, 0.5, 0)
+                    numBox.Text = tostring(val)
+                    label.Text = labelText .. ": " .. val
+                    pcall(callback, val)
+                end
+            end)
+        end
+
         function TabElements:CreateDropdown(label, options, callback)
-            -- [Included the Dropdown logic from your snippet here]
             local orderBase = #scrollFrame:GetChildren() * 2 
 
             local btn = Instance.new("TextButton", scrollFrame)
@@ -417,19 +486,32 @@ function Library:CreateWindow(Config)
             dropFrame.Visible = false
             Instance.new("UICorner", dropFrame).CornerRadius = UDim.new(0, 6)
 
+            local search = Instance.new("TextBox", dropFrame)
+            search.Size = UDim2.new(1, -10, 0, 25)
+            search.Position = UDim2.new(0, 5, 0, 0)
+            search.PlaceholderText = "Search..."
+            search.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+            search.TextColor3 = Color3.new(1,1,1)
+            search.Font = Enum.Font.Code
+
             local scroll = Instance.new("ScrollingFrame", dropFrame)
-            scroll.Size = UDim2.new(1, 0, 1, -5)
+            scroll.Size = UDim2.new(1, 0, 1, -30)
+            scroll.Position = UDim2.new(0, 0, 0, 30)
             scroll.BackgroundTransparency = 1
             scroll.ScrollBarThickness = 4
+            scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
             
             local dLayout = Instance.new("UIListLayout", scroll)
             dLayout.Padding = UDim.new(0, 2)
+            dLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 
             local isOpen = false
+            local btns = {}
+
             for _, opt in ipairs(options) do
                 local oBtn = Instance.new("TextButton", scroll)
                 oBtn.Size = UDim2.new(1, -10, 0, 25)
-                oBtn.BackgroundTransparency = 1
+                oBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
                 oBtn.TextColor3 = Color3.new(1,1,1)
                 oBtn.Text = opt
                 oBtn.Font = Enum.Font.Code
@@ -442,15 +524,33 @@ function Library:CreateWindow(Config)
                     dropFrame.Visible = false
                     pcall(callback, opt)
                 end)
+                table.insert(btns, oBtn)
             end
+
+            search.Changed:Connect(function(p)
+                if p == "Text" then
+                    local txt = search.Text:lower()
+                    local visCount = 0
+                    for _, b in ipairs(btns) do
+                        if string.find(b.Text:lower(), txt, 1, true) then
+                            b.Visible = true
+                            visCount = visCount + 1
+                        else
+                            b.Visible = false
+                        end
+                    end
+                    scroll.CanvasSize = UDim2.new(0, 0, 0, visCount * 27)
+                end
+            end)
 
             btn.MouseButton1Click:Connect(function()
                 isOpen = not isOpen
                 arrow.Text = isOpen and "▲" or "▼"
+                
                 if isOpen then
                     dropFrame.Visible = true
-                    scroll.CanvasSize = UDim2.new(0, 0, 0, #options * 27)
-                    TweenService:Create(dropFrame, TweenInfo.new(0.2), {Size = UDim2.new(1, -10, 0, math.min(#options * 27, 150))}):Play()
+                    scroll.CanvasSize = UDim2.new(0, 0, 0, #btns * 27)
+                    TweenService:Create(dropFrame, TweenInfo.new(0.2), {Size = UDim2.new(1, -10, 0, math.min(#btns * 27 + 35, 150))}):Play()
                 else
                     local anim = TweenService:Create(dropFrame, TweenInfo.new(0.2), {Size = UDim2.new(1, -10, 0, 0)})
                     anim:Play()
