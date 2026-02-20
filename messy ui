@@ -1345,7 +1345,18 @@ function Library:CreateWindow(Config)
                 if exp then refresh() else T(wrapper,{Size=UDim2.new(1,0,0,32)},0.2) end
             end)
             local S = {}
-            function S:AddLabel(t) Label(inner,{Size=UDim2.new(1,0,0,20),Text=t,TextSize=12,TextColor3=Theme.TextSecondary,TextXAlignment=Enum.TextXAlignment.Left}) end
+            function S:AddLabel(t)
+                local lbl = Label(inner, {
+                    Size            = UDim2.new(1,0,0,0),   -- height driven by AutomaticSize
+                    AutomaticSize   = Enum.AutomaticSize.Y,
+                    Text            = t,
+                    TextSize        = 12,
+                    TextColor3      = Theme.TextSecondary,
+                    TextXAlignment  = Enum.TextXAlignment.Left,
+                    TextYAlignment  = Enum.TextYAlignment.Top,
+                    TextWrapped     = true,
+                })
+            end
             function S:AddButton(t,cb)
                 local b=Btn(inner,{Size=UDim2.new(1,0,0,28),BackgroundColor3=Theme.BgElement2,Text=t,TextSize=13}); Corner(b,5)
                 b.MouseEnter:Connect(function() T(b,{BackgroundColor3=Theme.AccentDark},0.1) end)
