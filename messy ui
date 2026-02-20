@@ -1,4 +1,9 @@
 --// MessyHub UI Library — v5
+--// Fixed: minimize bug (sidebar/content now hidden when minimized)
+--// New:   SaveConfig/LoadConfig, Watermark, Destroy, SetVisible, SetValue returns,
+--//        CreateMultiDropdown, CreateRadioGroup, CreateStepSlider,
+--//        CreateConfirmButton, CreateTable, CreateSearchBar, tab search,
+--//        loading screen, cursor ring, Window:Destroy()
 
 local Library = {}
 
@@ -1224,44 +1229,197 @@ function Library:CreateWindow(Config)
 
         -- ── Multi-Dropdown ────────────────────────────────────────────────────
         function TabElements:CreateMultiDropdown(labelText, options, callback)
+            -- BUG FIX: use nil to mean "not selected" instead of false.
+            -- `not false` == true, which caused deselected items to re-select on
+            -- the next click. Now we set selected[opt] = true on select and
+            -- selected[opt] = nil on deselect so getCount and all visual checks
+            -- work correctly.
             local selected = {}
-            local function getCount() local n=0; for _ in pairs(selected) do n+=1 end; return n end
-            local btn=Btn(scroll,{LayoutOrder=nxt(),Size=UDim2.new(1,0,0,32),BackgroundColor3=Theme.BgElement,Text="  "..labelText,TextXAlignment=Enum.TextXAlignment.Left})
-            Corner(btn,7); Stroke(btn,Theme.Accent,1,0.65)
-            local badge=Frame(btn,{Size=UDim2.new(0,20,0,20),Position=UDim2.new(1,-52,0.5,-10),BackgroundColor3=Theme.AccentDark})
-            Corner(badge,10)
-            local bCount=Label(badge,{Size=UDim2.new(1,0,1,0),Text="0",Font=Enum.Font.GothamBold,TextSize=11,TextColor3=Color3.new(1,1,1)})
-            Label(btn,{Size=UDim2.new(0,26,1,0),Position=UDim2.new(1,-28,0,0),Text="v",Font=Enum.Font.GothamBold,TextSize=12,TextColor3=Theme.Accent})
-            local drop=Frame(scroll,{LayoutOrder=nxt(),Size=UDim2.new(1,0,0,0),BackgroundColor3=Theme.BgElement2,ClipsDescendants=true,Visible=false})
-            Corner(drop,7)
-            local os3=Instance.new("ScrollingFrame",drop); os3.Size=UDim2.new(1,0,1,0); os3.BackgroundTransparency=1; os3.ScrollBarThickness=3; os3.ScrollBarImageColor3=Theme.Accent; os3.CanvasSize=UDim2.new(0,0,0,0)
-            local dL2=Instance.new("UIListLayout",os3); dL2.Padding=UDim.new(0,2); dL2.HorizontalAlignment=Enum.HorizontalAlignment.Center
-            local dP2=Instance.new("UIPadding",os3); dP2.PaddingLeft=UDim.new(0,5); dP2.PaddingRight=UDim.new(0,5)
-            local isOpen=false
-            for _,opt in ipairs(options) do
-                local row=Btn(os3,{Size=UDim2.new(1,0,0,28),BackgroundColor3=Theme.BgElement,Text="",TextSize=13}); Corner(row,5)
-                local chk=Frame(row,{Size=UDim2.new(0,16,0,16),Position=UDim2.new(0,6,0.5,-8),BackgroundColor3=Theme.BgElement2}); Corner(chk,4)
-                local chkMark=Label(chk,{Size=UDim2.new(1,0,1,0),Text="",Font=Enum.Font.GothamBold,TextSize=12,TextColor3=Color3.new(1,1,1)})
-                Label(row,{Size=UDim2.new(1,-36,1,0),Position=UDim2.new(0,28,0,0),Text=opt,TextSize=13,TextColor3=Theme.TextPrimary,TextXAlignment=Enum.TextXAlignment.Left})
-                row.MouseEnter:Connect(function() T(row,{BackgroundColor3=Theme.AccentDark},0.1) end)
-                row.MouseLeave:Connect(function() T(row,{BackgroundColor3=selected[opt] and Color3.fromRGB(40,10,60) or Theme.BgElement},0.1) end)
+            local rowRefs  = {}   -- opt -> {row, chk, chkMark}  for SetValue
+
+            local function getCount()
+                local n = 0
+                for _ in pairs(selected) do n += 1 end
+                return n
+            end
+
+            local function getList()
+                local t = {}
+                for k in pairs(selected) do table.insert(t, k) end
+                return t
+            end
+
+            local btn = Btn(scroll, {
+                LayoutOrder = nxt(),
+                Size = UDim2.new(1,0,0,32),
+                BackgroundColor3 = Theme.BgElement,
+                Text = "  " .. labelText,
+                TextXAlignment = Enum.TextXAlignment.Left,
+            })
+            Corner(btn, 7); Stroke(btn, Theme.Accent, 1, 0.65)
+
+            local badge = Frame(btn, {
+                Size = UDim2.new(0,22,0,22),
+                Position = UDim2.new(1,-54,0.5,-11),
+                BackgroundColor3 = Theme.AccentDark,
+            })
+            Corner(badge, 11)
+            local bCount = Label(badge, {
+                Size = UDim2.new(1,0,1,0),
+                Text = "0",
+                Font = Enum.Font.GothamBold,
+                TextSize = 11,
+                TextColor3 = Color3.new(1,1,1),
+            })
+
+            Label(btn, {
+                Size = UDim2.new(0,26,1,0),
+                Position = UDim2.new(1,-28,0,0),
+                Text = "v",
+                Font = Enum.Font.GothamBold,
+                TextSize = 12,
+                TextColor3 = Theme.Accent,
+            })
+
+            local drop = Frame(scroll, {
+                LayoutOrder = nxt(),
+                Size = UDim2.new(1,0,0,0),
+                BackgroundColor3 = Theme.BgElement2,
+                ClipsDescendants = true,
+                Visible = false,
+            })
+            Corner(drop, 7)
+
+            local os3 = Instance.new("ScrollingFrame", drop)
+            os3.Size = UDim2.new(1,0,1,0)
+            os3.BackgroundTransparency = 1
+            os3.ScrollBarThickness = 3
+            os3.ScrollBarImageColor3 = Theme.Accent
+            os3.CanvasSize = UDim2.new(0,0,0,0)
+            local dL2 = Instance.new("UIListLayout", os3)
+            dL2.Padding = UDim.new(0,2)
+            dL2.HorizontalAlignment = Enum.HorizontalAlignment.Center
+            local dP2 = Instance.new("UIPadding", os3)
+            dP2.PaddingLeft = UDim.new(0,5); dP2.PaddingRight = UDim.new(0,5)
+            dP2.PaddingTop  = UDim.new(0,4); dP2.PaddingBottom = UDim.new(0,4)
+
+            local isOpen = false
+
+            for _, opt in ipairs(options) do
+                local isSelected = false   -- local shadow for this row
+
+                local row = Btn(os3, {
+                    Size = UDim2.new(1,0,0,30),
+                    BackgroundColor3 = Theme.BgElement,
+                    Text = "",
+                })
+                Corner(row, 6)
+
+                -- Checkbox box
+                local chk = Frame(row, {
+                    Size = UDim2.new(0,16,0,16),
+                    Position = UDim2.new(0,8,0.5,-8),
+                    BackgroundColor3 = Theme.BgElement2,
+                })
+                Corner(chk, 4)
+                Stroke(chk, Theme.Accent, 1, 0.6)
+
+                -- Checkmark (visible when selected)
+                local chkMark = Label(chk, {
+                    Size = UDim2.new(1,0,1,0),
+                    Text = "",
+                    Font = Enum.Font.GothamBold,
+                    TextSize = 13,
+                    TextColor3 = Color3.new(1,1,1),
+                })
+
+                Label(row, {
+                    Size = UDim2.new(1,-40,1,0),
+                    Position = UDim2.new(0,32,0,0),
+                    Text = opt,
+                    TextSize = 13,
+                    TextColor3 = Theme.TextSecondary,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                })
+
+                rowRefs[opt] = {row=row, chk=chk, chkMark=chkMark}
+
+                -- Shared visual update for this row
+                local function applyRowState(on)
+                    isSelected = on
+                    if on then
+                        selected[opt] = true
+                    else
+                        selected[opt] = nil   -- nil = not in table, getCount correct
+                    end
+                    -- Checkbox fill
+                    chkMark.Text = on and "v" or ""
+                    T(chk,  {BackgroundColor3 = on and Theme.Accent or Theme.BgElement2}, 0.12)
+                    -- Row background
+                    T(row,  {BackgroundColor3 = on and Color3.fromRGB(38,10,58) or Theme.BgElement}, 0.12)
+                    -- Badge count
+                    local c = getCount()
+                    bCount.Text = tostring(c)
+                    T(badge, {BackgroundColor3 = c > 0 and Theme.Accent or Theme.AccentDark}, 0.12)
+                end
+
+                row.MouseEnter:Connect(function()
+                    if not isSelected then T(row, {BackgroundColor3 = Theme.AccentDark}, 0.1) end
+                end)
+                row.MouseLeave:Connect(function()
+                    -- read isSelected (local), NOT selected[opt] which may be nil
+                    T(row, {BackgroundColor3 = isSelected and Color3.fromRGB(38,10,58) or Theme.BgElement}, 0.1)
+                end)
+
                 row.MouseButton1Click:Connect(function()
-                    selected[opt]=not selected[opt]
-                    chkMark.Text = selected[opt] and "v" or ""
-                    T(chk,{BackgroundColor3=selected[opt] and Theme.Accent or Theme.BgElement2},0.12)
-                    T(row,{BackgroundColor3=selected[opt] and Color3.fromRGB(40,10,60) or Theme.BgElement},0.12)
-                    local c=getCount(); bCount.Text=tostring(c)
-                    T(badge,{BackgroundColor3=c>0 and Theme.Accent or Theme.AccentDark},0.12)
-                    local sel={}; for k,v in pairs(selected) do if v then table.insert(sel,k) end end
-                    pcall(callback, sel)
+                    applyRowState(not isSelected)   -- toggle using local shadow
+                    pcall(callback, getList())
                 end)
             end
-            os3.CanvasSize=UDim2.new(0,0,0,#options*30)
+
+            os3.CanvasSize = UDim2.new(0,0,0, #options * 34)
+
             btn.MouseButton1Click:Connect(function()
-                isOpen=not isOpen
-                if isOpen then drop.Visible=true; T(drop,{Size=UDim2.new(1,0,0,math.min(#options*30,150))},0.18)
-                else T(drop,{Size=UDim2.new(1,0,0,0)},0.18); task.wait(0.2); if not isOpen then drop.Visible=false end end
+                isOpen = not isOpen
+                if isOpen then
+                    drop.Visible = true
+                    T(drop, {Size = UDim2.new(1,0,0, math.min(#options*34+8, 180))}, 0.18)
+                else
+                    T(drop, {Size = UDim2.new(1,0,0,0)}, 0.18)
+                    task.wait(0.2)
+                    if not isOpen then drop.Visible = false end
+                end
             end)
+
+            -- Return object with SetValue (accepts array of strings)
+            local MDObj = {}
+            function MDObj:SetValue(arr)
+                -- clear all first
+                for opt2, ref in pairs(rowRefs) do
+                    selected[opt2] = nil
+                    ref.chkMark.Text = ""
+                    ref.chk.BackgroundColor3 = Theme.BgElement2
+                    ref.row.BackgroundColor3 = Theme.BgElement
+                end
+                -- apply new
+                if type(arr) == "table" then
+                    for _, v in ipairs(arr) do
+                        if rowRefs[v] then
+                            selected[v] = true
+                            rowRefs[v].chkMark.Text = "v"
+                            rowRefs[v].chk.BackgroundColor3 = Theme.Accent
+                            rowRefs[v].row.BackgroundColor3 = Color3.fromRGB(38,10,58)
+                        end
+                    end
+                end
+                local c = getCount()
+                bCount.Text = tostring(c)
+                badge.BackgroundColor3 = c > 0 and Theme.Accent or Theme.AccentDark
+                pcall(callback, getList())
+            end
+            function MDObj:GetSelected() return getList() end
+            function MDObj:SetVisible(v) btn.Visible=v; if not v then drop.Visible=false end end
+            return MDObj
         end
 
         -- ── Radio Group ───────────────────────────────────────────────────────
