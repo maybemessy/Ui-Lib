@@ -1490,33 +1490,481 @@ function Library:CreateWindow(Config)
 
         -- ── Color Picker ──────────────────────────────────────────────────────
         function TabElements:CreateColorPicker(labelText, defColor, callback)
-            defColor=defColor or Theme.Accent
-            local r,g,b=math.floor(defColor.R*255),math.floor(defColor.G*255),math.floor(defColor.B*255)
-            local f=ElemFrame(32); f.ClipsDescendants=true
-            local hdr=Btn(f,{Size=UDim2.new(1,0,0,32),BackgroundTransparency=1,Text=""})
-            local hPad=Instance.new("UIPadding",hdr); hPad.PaddingLeft=UDim.new(0,10)
-            Label(hdr,{Size=UDim2.new(1,-40,1,0),Text="Color: "..labelText,TextXAlignment=Enum.TextXAlignment.Left})
-            local prev=Frame(hdr,{Size=UDim2.new(0,18,0,18),Position=UDim2.new(1,-28,0.5,-9),BackgroundColor3=defColor}); Corner(prev,4)
-            local inner=Frame(f,{Size=UDim2.new(1,-16,0,82),Position=UDim2.new(0,8,0,36),BackgroundTransparency=1})
-            local iL=Instance.new("UIListLayout",inner); iL.Padding=UDim.new(0,5)
-            local exp=false
-            hdr.MouseButton1Click:Connect(function() exp=not exp; T(f,{Size=UDim2.new(1,0,0,exp and 126 or 32)},0.2) end)
-            local function upd() local col=Color3.fromRGB(r,g,b); prev.BackgroundColor3=col; pcall(callback,col) end
-            local function mks(lbl,init,onSet)
-                local row=Frame(inner,{Size=UDim2.new(1,0,0,20),BackgroundTransparency=1})
-                Label(row,{Size=UDim2.new(0,12,1,0),Text=lbl,Font=Enum.Font.GothamBold,TextSize=10,TextColor3=Theme.TextSecondary})
-                local tk=Frame(row,{Size=UDim2.new(1,-46,0,6),Position=UDim2.new(0,16,0.5,-3),BackgroundColor3=Theme.BgElement2}); Corner(tk,3)
-                local fl=Frame(tk,{Size=UDim2.new(init/255,0,1,0),BackgroundColor3=Theme.Accent}); Corner(fl,3)
-                local kn=Frame(tk,{Size=UDim2.new(0,12,0,12),BackgroundColor3=Color3.new(1,1,1)}); kn.AnchorPoint=Vector2.new(0.5,0.5); kn.Position=UDim2.new(init/255,0,0.5,0); Corner(kn,6)
-                local vb=Box(row,{Size=UDim2.new(0,28,1,0),Position=UDim2.new(1,-28,0,0),BackgroundColor3=Theme.BgElement2,Font=Enum.Font.Code,TextSize=10,Text=tostring(init),TextXAlignment=Enum.TextXAlignment.Center}); Corner(vb,3)
-                local function set(v) v=math.clamp(math.floor(v+0.5),0,255); fl.Size=UDim2.new(v/255,0,1,0); kn.Position=UDim2.new(v/255,0,0.5,0); vb.Text=tostring(v); onSet(v); upd() end
-                local drg=false
-                tk.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drg=true end end)
-                conn(UserInputService.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drg=false end end))
-                conn(UserInputService.InputChanged:Connect(function(i) if drg and i.UserInputType==Enum.UserInputType.MouseMovement then set(math.clamp((i.Position.X-tk.AbsolutePosition.X)/tk.AbsoluteSize.X,0,1)*255) end end))
-                vb.FocusLost:Connect(function() set(tonumber(vb.Text) or init) end)
+            defColor = defColor or Theme.Accent
+
+            -- ── Shared HSV state (single source of truth) ─────────────────────
+            -- All pickers (wheel, V-slider, RGB sliders) read/write h,s,v.
+            -- Color3.toHSV returns hue 0-1, sat 0-1, val 0-1.
+            local h, s, v = Color3.toHSV(defColor)
+
+            -- collapsed height / expanded heights
+            local H_HEADER  = 32
+            local H_WHEEL   = 198   -- header + tab bar + wheel panel
+            local H_RGB     = 142   -- header + tab bar + 3 RGB sliders
+            local activeTab = "wheel"
+            local exp       = false
+
+            local f = ElemFrame(H_HEADER)
+            f.ClipsDescendants = true
+
+            -- ── Header row (always visible) ───────────────────────────────────
+            local hdr = Btn(f, {Size=UDim2.new(1,0,0,H_HEADER), BackgroundTransparency=1, Text=""})
+            local hPad = Instance.new("UIPadding", hdr); hPad.PaddingLeft = UDim.new(0,10)
+            Label(hdr, {Size=UDim2.new(1,-40,1,0), Text="Color: "..labelText, TextXAlignment=Enum.TextXAlignment.Left})
+            local prev = Frame(hdr, {Size=UDim2.new(0,18,0,18), Position=UDim2.new(1,-28,0.5,-9), BackgroundColor3=defColor})
+            Corner(prev, 4)
+
+            -- ── Expand / collapse ─────────────────────────────────────────────
+            local function expandedH()
+                return activeTab == "wheel" and H_WHEEL or H_RGB
             end
-            mks("R",r,function(v) r=v end); mks("G",g,function(v) g=v end); mks("B",b,function(v) b=v end)
+            hdr.MouseButton1Click:Connect(function()
+                exp = not exp
+                T(f, {Size=UDim2.new(1,0,0, exp and expandedH() or H_HEADER)}, 0.22)
+            end)
+
+            -- ── Tab switcher bar ──────────────────────────────────────────────
+            local tabBar = Frame(f, {
+                Size=UDim2.new(1,-16,0,24),
+                Position=UDim2.new(0,8,0,H_HEADER+4),
+                BackgroundColor3=Theme.BgElement2,
+            })
+            Corner(tabBar, 6)
+
+            local function makeTabBtn(txt, xScale)
+                local b = Btn(tabBar, {
+                    Size=UDim2.new(0.5,0,1,0),
+                    Position=UDim2.new(xScale,0,0,0),
+                    BackgroundTransparency=1,
+                    Text=txt, TextSize=11,
+                    Font=Enum.Font.GothamBold,
+                    TextColor3=Theme.TextSecondary,
+                })
+                Corner(b, 5)
+                return b
+            end
+
+            local wheelTabBtn = makeTabBtn("🎨  Wheel", 0)
+            local rgbTabBtn   = makeTabBtn("⚙  RGB",   0.5)
+
+            -- active-tab indicator pill
+            local tabPill = Frame(tabBar, {
+                Size=UDim2.new(0.5,-4,1,-4),
+                Position=UDim2.new(0,2,0,2),
+                BackgroundColor3=Theme.AccentDark,
+            })
+            Corner(tabPill, 5)
+
+            -- ── Panels ────────────────────────────────────────────────────────
+            local PANEL_Y = H_HEADER + 32  -- top of panels (below tab bar)
+
+            -- Wheel panel
+            local wheelPanel = Frame(f, {
+                Size=UDim2.new(1,-16,0,158),
+                Position=UDim2.new(0,8,0,PANEL_Y),
+                BackgroundTransparency=1,
+            })
+
+            -- RGB panel
+            local rgbPanel = Frame(f, {
+                Size=UDim2.new(1,-16,0,102),
+                Position=UDim2.new(0,8,0,PANEL_Y),
+                BackgroundTransparency=1,
+                Visible=false,
+            })
+
+            -- ── Shared helpers ────────────────────────────────────────────────
+            local function hsvToRGB()
+                local c = Color3.fromHSV(h, s, v)
+                return math.floor(c.R*255+0.5), math.floor(c.G*255+0.5), math.floor(c.B*255+0.5)
+            end
+
+            -- forward-declare so RGB sliders and wheel can cross-update
+            local syncWheelFromHSV  -- function()
+            local syncRGBFromHSV    -- function()
+
+            local function fireCallback()
+                local col = Color3.fromHSV(h, s, v)
+                prev.BackgroundColor3 = col
+                pcall(callback, col)
+            end
+
+            -- ══════════════════════════════════════════════════════════════════
+            -- WHEEL PANEL
+            -- ══════════════════════════════════════════════════════════════════
+            -- Roblox doesn't have a built-in circle gradient, so we approximate
+            -- the hue wheel with a rotating UIGradient on a square clipped to a
+            -- circle, and overlay a white-to-transparent radial gradient for
+            -- saturation.  The user drags a cursor dot around the wheel.
+            --
+            -- Layout:
+            --   [  color wheel (128×128)  ] [ V slider (tall, right side) ]
+            --   [  hex input at bottom    ]
+            -- ─────────────────────────────────────────────────────────────────
+            local WHEEL_SIZE = 128
+            local WHEEL_MID  = WHEEL_SIZE / 2
+
+            -- Wheel outer clip (circle)
+            local wheelClip = Frame(wheelPanel, {
+                Size=UDim2.new(0,WHEEL_SIZE,0,WHEEL_SIZE),
+                Position=UDim2.new(0,0,0,0),
+                BackgroundTransparency=1,
+                ClipsDescendants=true,
+            })
+            Corner(wheelClip, WHEEL_MID)   -- makes it a circle
+
+            -- Hue ring: a square with a conic-approximation gradient.
+            -- We stack 6 rotated gradient strips to approximate a full hue ring.
+            local HUE_COLORS = {
+                Color3.fromRGB(255,0,0),   -- 0°   red
+                Color3.fromRGB(255,255,0), -- 60°  yellow
+                Color3.fromRGB(0,255,0),   -- 120° green
+                Color3.fromRGB(0,255,255), -- 180° cyan
+                Color3.fromRGB(0,0,255),   -- 240° blue
+                Color3.fromRGB(255,0,255), -- 300° magenta
+                Color3.fromRGB(255,0,0),   -- 360° red (close the loop)
+            }
+
+            -- Build a hue square from many thin vertical slices
+            -- Each slice is a 2-pixel-wide frame with a 2-stop gradient
+            local sliceCount = 64
+            for i = 1, sliceCount do
+                local t0 = (i-1)/sliceCount
+                local t1 = i/sliceCount
+                -- interpolate through the 6-segment hue ramp
+                local function hueAt(t)
+                    local seg = t * 6
+                    local idx = math.floor(seg)
+                    local frac = seg - idx
+                    local c0 = HUE_COLORS[idx+1] or HUE_COLORS[1]
+                    local c1 = HUE_COLORS[idx+2] or HUE_COLORS[1]
+                    return Color3.new(
+                        c0.R + (c1.R-c0.R)*frac,
+                        c0.G + (c1.G-c0.G)*frac,
+                        c0.B + (c1.B-c0.B)*frac
+                    )
+                end
+                local sl = Frame(wheelClip, {
+                    Size=UDim2.new(0, math.ceil(WHEEL_SIZE/sliceCount)+1, 1, 0),
+                    Position=UDim2.new(t0, 0, 0, 0),
+                    BorderSizePixel=0,
+                    BackgroundColor3=hueAt(t0),
+                })
+                local g = Instance.new("UIGradient", sl)
+                g.Color = ColorSequence.new(hueAt(t0), hueAt(t1))
+                g.Rotation = 0
+            end
+
+            -- White centre-to-edge radial overlay (for saturation: centre=white,
+            -- edge=full-hue).  A UIGradient on a full-size frame goes left→right,
+            -- so we use transparency: centre transparent white → edge transparent.
+            -- We approximate with 4 overlapping radial wedges.
+            local satOverlay = Frame(wheelClip, {
+                Size=UDim2.new(1,0,1,0),
+                BackgroundColor3=Color3.new(1,1,1),
+                BackgroundTransparency=0,
+            })
+            local satG = Instance.new("UIGradient", satOverlay)
+            satG.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, Color3.new(1,1,1)),
+                ColorSequenceKeypoint.new(1, Color3.new(1,1,1)),
+            })
+            satG.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0,   0),
+                NumberSequenceKeypoint.new(0.5, 0.65),
+                NumberSequenceKeypoint.new(1,   1),
+            })
+
+            -- Black value overlay (covers the whole wheel, transparency = v)
+            local valOverlay = Frame(wheelClip, {
+                Size=UDim2.new(1,0,1,0),
+                BackgroundColor3=Color3.new(0,0,0),
+                BackgroundTransparency=v,
+            })
+
+            -- Cursor dot on the wheel
+            local wheelCursor = Frame(wheelClip, {
+                Size=UDim2.new(0,12,0,12),
+                AnchorPoint=Vector2.new(0.5,0.5),
+                BackgroundColor3=Color3.new(1,1,1),
+                ZIndex=5,
+            })
+            Corner(wheelCursor, 6)
+            Stroke(wheelCursor, Color3.new(0,0,0), 1.5, 0)
+
+            -- Convert h,s to wheel XY (polar → cartesian on unit circle)
+            -- h=0 is right, goes counter-clockwise matching Roblox Color3.fromHSV
+            local function hsToCursorPos()
+                local angle = h * 2 * math.pi
+                local dist  = s * WHEEL_MID
+                local cx = WHEEL_MID + dist * math.cos(angle)
+                local cy = WHEEL_MID - dist * math.sin(angle)
+                return cx, cy
+            end
+
+            syncWheelFromHSV = function()
+                local cx, cy = hsToCursorPos()
+                wheelCursor.Position = UDim2.new(0, cx, 0, cy)
+                valOverlay.BackgroundTransparency = v
+            end
+            syncWheelFromHSV()
+
+            -- Hit frame for dragging on the wheel
+            local wheelHit = Btn(wheelClip, {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text="", ZIndex=4})
+            local wheelDrag = false
+
+            local function applyWheelPos(mx, my)
+                -- mx,my in absolute screen coords → local to wheel
+                local ax = wheelClip.AbsolutePosition.X
+                local ay = wheelClip.AbsolutePosition.Y
+                local lx = mx - ax - WHEEL_MID
+                local ly = my - ay - WHEEL_MID
+                local dist = math.sqrt(lx*lx + ly*ly)
+                local angle = math.atan2(-ly, lx)
+                if angle < 0 then angle = angle + 2*math.pi end
+                h = angle / (2*math.pi)
+                s = math.clamp(dist / WHEEL_MID, 0, 1)
+                syncWheelFromHSV()
+                syncRGBFromHSV()
+                fireCallback()
+            end
+
+            wheelHit.InputBegan:Connect(function(i)
+                if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                    wheelDrag = true
+                    applyWheelPos(i.Position.X, i.Position.Y)
+                end
+            end)
+            conn(UserInputService.InputEnded:Connect(function(i)
+                if i.UserInputType == Enum.UserInputType.MouseButton1 then wheelDrag = false end
+            end))
+            conn(UserInputService.InputChanged:Connect(function(i)
+                if wheelDrag and i.UserInputType == Enum.UserInputType.MouseMovement then
+                    applyWheelPos(i.Position.X, i.Position.Y)
+                end
+            end))
+
+            -- ── Value (brightness) slider — right of wheel ────────────────────
+            local V_W, V_H = 18, WHEEL_SIZE
+            local vTrack = Frame(wheelPanel, {
+                Size=UDim2.new(0,V_W,0,V_H),
+                Position=UDim2.new(0,WHEEL_SIZE+8,0,0),
+                BackgroundColor3=Color3.new(0,0,0),
+            })
+            Corner(vTrack, 5)
+            -- gradient: top=current hue pure colour, bottom=black
+            local vGrad = Instance.new("UIGradient", vTrack)
+            vGrad.Rotation = 90
+            local function updateVGrad()
+                vGrad.Color = ColorSequence.new(
+                    Color3.fromHSV(h, s, 1),
+                    Color3.new(0,0,0)
+                )
+            end
+            updateVGrad()
+
+            local vKnob = Frame(vTrack, {
+                Size=UDim2.new(1,4,0,10),
+                AnchorPoint=Vector2.new(0.5,0.5),
+                Position=UDim2.new(0.5,0, 1-v, 0),
+                BackgroundColor3=Color3.new(1,1,1),
+                ZIndex=3,
+            })
+            Corner(vKnob, 3)
+            Stroke(vKnob, Color3.new(0,0,0), 1.5, 0)
+
+            local vDrag = false
+            local vHit  = Btn(vTrack, {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text="", ZIndex=2})
+
+            local function applyV(sy)
+                local ay = vTrack.AbsolutePosition.Y
+                local ah = vTrack.AbsoluteSize.Y
+                v = 1 - math.clamp((sy - ay) / ah, 0, 1)
+                vKnob.Position  = UDim2.new(0.5, 0, 1-v, 0)
+                valOverlay.BackgroundTransparency = v
+                updateVGrad()
+                syncRGBFromHSV()
+                fireCallback()
+            end
+
+            vHit.InputBegan:Connect(function(i)
+                if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                    vDrag = true; applyV(i.Position.Y)
+                end
+            end)
+            conn(UserInputService.InputEnded:Connect(function(i)
+                if i.UserInputType == Enum.UserInputType.MouseButton1 then vDrag = false end
+            end))
+            conn(UserInputService.InputChanged:Connect(function(i)
+                if vDrag and i.UserInputType == Enum.UserInputType.MouseMovement then applyV(i.Position.Y) end
+            end))
+
+            -- ── Hex input — below wheel ───────────────────────────────────────
+            local hexRow = Frame(wheelPanel, {
+                Size=UDim2.new(0, WHEEL_SIZE+8+V_W, 0, 24),
+                Position=UDim2.new(0,0,0,WHEEL_SIZE+6),
+                BackgroundTransparency=1,
+            })
+            Label(hexRow, {Size=UDim2.new(0,26,1,0), Text="#HEX", Font=Enum.Font.GothamBold, TextSize=10, TextColor3=Theme.TextSecondary})
+            local hexBox = Box(hexRow, {
+                Size=UDim2.new(1,-30,1,0), Position=UDim2.new(0,30,0,0),
+                BackgroundColor3=Theme.BgElement2, Font=Enum.Font.Code, TextSize=11,
+                Text="", TextXAlignment=Enum.TextXAlignment.Left,
+            })
+            Corner(hexBox, 4)
+            local hexPad = Instance.new("UIPadding", hexBox); hexPad.PaddingLeft = UDim.new(0,5)
+
+            local function toHex()
+                local r2,g2,b2 = hsvToRGB()
+                return string.format("%02X%02X%02X", r2, g2, b2)
+            end
+            local function syncHex() hexBox.Text = toHex() end
+
+            hexBox.FocusLost:Connect(function()
+                local hex = hexBox.Text:gsub("#",""):upper()
+                if #hex == 6 then
+                    local ri = tonumber(hex:sub(1,2),16)
+                    local gi = tonumber(hex:sub(3,4),16)
+                    local bi = tonumber(hex:sub(5,6),16)
+                    if ri and gi and bi then
+                        local col = Color3.fromRGB(ri,gi,bi)
+                        h,s,v = Color3.toHSV(col)
+                        syncWheelFromHSV()
+                        updateVGrad()
+                        syncRGBFromHSV()
+                        fireCallback()
+                    end
+                end
+                syncHex()
+            end)
+
+            -- ══════════════════════════════════════════════════════════════════
+            -- RGB PANEL  (3 sliders identical to original, now HSV-synced)
+            -- ══════════════════════════════════════════════════════════════════
+            local rgbLayout = Instance.new("UIListLayout", rgbPanel)
+            rgbLayout.Padding  = UDim.new(0,5)
+            rgbLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+            -- r2/g2/b2 refs so syncRGBFromHSV can push values
+            local rSetFn, gSetFn, bSetFn
+
+            local function makeRGBSlider(lbl, initVal, onSet, order)
+                local row = Frame(rgbPanel, {LayoutOrder=order, Size=UDim2.new(1,0,0,26), BackgroundTransparency=1})
+                Label(row, {Size=UDim2.new(0,12,1,0), Text=lbl, Font=Enum.Font.GothamBold, TextSize=10, TextColor3=Theme.TextSecondary})
+                local tk = Frame(row, {Size=UDim2.new(1,-46,0,6), Position=UDim2.new(0,16,0.5,-3), BackgroundColor3=Theme.BgElement2})
+                Corner(tk,3)
+                local fl = Frame(tk, {Size=UDim2.new(initVal/255,0,1,0), BackgroundColor3=Theme.Accent})
+                Corner(fl,3)
+                local kn = Frame(tk, {Size=UDim2.new(0,12,0,12), BackgroundColor3=Color3.new(1,1,1)})
+                kn.AnchorPoint = Vector2.new(0.5,0.5)
+                kn.Position = UDim2.new(initVal/255,0,0.5,0)
+                Corner(kn,6)
+                local vb = Box(row, {
+                    Size=UDim2.new(0,28,1,0), Position=UDim2.new(1,-28,0,0),
+                    BackgroundColor3=Theme.BgElement2, Font=Enum.Font.Code, TextSize=10,
+                    Text=tostring(initVal), TextXAlignment=Enum.TextXAlignment.Center,
+                })
+                Corner(vb,3)
+
+                local cur = initVal
+                local function setVal(nv)
+                    nv = math.clamp(math.floor(nv+0.5),0,255)
+                    cur = nv
+                    fl.Size = UDim2.new(nv/255,0,1,0)
+                    kn.Position = UDim2.new(nv/255,0,0.5,0)
+                    vb.Text = tostring(nv)
+                    onSet(nv)
+                end
+                local function setValAndSync(nv)
+                    setVal(nv)
+                    -- derive new h,s,v from changed RGB
+                    local rn = lbl=="R" and nv or (rSetFn and rSetFn() or 0)
+                    -- We sync by reading back from RGB state after onSet
+                    -- (onSet updates r/g/b locals in closure — see below)
+                    -- Just fire fireCallback after onSet already updated h,s,v
+                end
+
+                local drg = false
+                tk.InputBegan:Connect(function(i)
+                    if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                        drg = true
+                        setVal(math.clamp((i.Position.X-tk.AbsolutePosition.X)/tk.AbsoluteSize.X,0,1)*255)
+                        onSet(cur); updateHSVFromRGB()
+                    end
+                end)
+                conn(UserInputService.InputEnded:Connect(function(i)
+                    if i.UserInputType == Enum.UserInputType.MouseButton1 then drg = false end
+                end))
+                conn(UserInputService.InputChanged:Connect(function(i)
+                    if drg and i.UserInputType == Enum.UserInputType.MouseMovement then
+                        setVal(math.clamp((i.Position.X-tk.AbsolutePosition.X)/tk.AbsoluteSize.X,0,1)*255)
+                        onSet(cur); updateHSVFromRGB()
+                    end
+                end))
+                vb.FocusLost:Connect(function()
+                    setVal(tonumber(vb.Text) or cur)
+                    onSet(cur); updateHSVFromRGB()
+                end)
+
+                -- return a push-setter so syncRGBFromHSV can update the knobs
+                return function(nv)
+                    setVal(nv)
+                end
+            end
+
+            -- RGB state (maintained alongside h,s,v)
+            local rr, gg, bb
+            do local r2,g2,b2 = hsvToRGB(); rr=r2; gg=g2; bb=b2 end
+
+            -- updateHSVFromRGB: called when user moves RGB sliders
+            function updateHSVFromRGB()
+                local col = Color3.fromRGB(rr,gg,bb)
+                h,s,v = Color3.toHSV(col)
+                syncWheelFromHSV()
+                updateVGrad()
+                syncHex()
+                fireCallback()
+            end
+
+            rSetFn = makeRGBSlider("R", rr, function(nv) rr=nv end, 1)
+            gSetFn = makeRGBSlider("G", gg, function(nv) gg=nv end, 2)
+            bSetFn = makeRGBSlider("B", bb, function(nv) bb=nv end, 3)
+
+            -- syncRGBFromHSV: called when wheel/V-slider changes
+            syncRGBFromHSV = function()
+                local r2,g2,b2 = hsvToRGB()
+                rr=r2; gg=g2; bb=b2
+                rSetFn(r2); gSetFn(g2); bSetFn(b2)
+                updateVGrad()
+                syncHex()
+            end
+
+            syncHex()
+
+            -- ── Tab switching logic ───────────────────────────────────────────
+            local function switchTab(to)
+                activeTab = to
+                if to == "wheel" then
+                    T(tabPill, {Position=UDim2.new(0,2,0,2)}, 0.15)
+                    wheelTabBtn.TextColor3 = Theme.TextAccent
+                    rgbTabBtn.TextColor3   = Theme.TextSecondary
+                    wheelPanel.Visible = true
+                    rgbPanel.Visible   = false
+                else
+                    T(tabPill, {Position=UDim2.new(0.5,2,0,2)}, 0.15)
+                    wheelTabBtn.TextColor3 = Theme.TextSecondary
+                    rgbTabBtn.TextColor3   = Theme.TextAccent
+                    wheelPanel.Visible = false
+                    rgbPanel.Visible   = true
+                end
+                if exp then
+                    T(f, {Size=UDim2.new(1,0,0,expandedH())}, 0.15)
+                end
+            end
+
+            wheelTabBtn.MouseButton1Click:Connect(function() switchTab("wheel") end)
+            rgbTabBtn.MouseButton1Click:Connect(function()   switchTab("rgb")   end)
+            switchTab("wheel")  -- start on wheel tab
         end
 
         -- ── Progress Bar ──────────────────────────────────────────────────────
