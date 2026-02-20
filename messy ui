@@ -226,7 +226,10 @@ function Library:CreateWindow(Config)
             task.wait(0.45)
             if loader and loader.Parent then loader:Destroy() end
             spinConn:Disconnect()
+            openMain()   -- ← open the window AFTER the loader is fully gone
         end)
+    else
+        openMain()       -- ← no loader: open immediately
     end
 
     -- ── Cursor Ring ───────────────────────────────────────────────────────────
@@ -273,21 +276,22 @@ function Library:CreateWindow(Config)
         BackgroundColor3 = Theme.BgMain,
         Active           = true,
         Draggable        = true,
-        Visible          = not useKeySystem,
+        Visible          = false,          -- hidden until openMain() fires
         ClipsDescendants = true,
     })
     Corner(main, 10)
     local mainStroke = Stroke(main, Theme.Accent, 1, 0.45)
     regAccent(mainStroke, "Color")
-    -- Defer the open tween by two frames so the ScreenGui is fully parented
-    -- before TweenService animates the Size property.  Without this the tween
-    -- fires while the gui is still being set up and gets silently dropped,
-    -- leaving main stuck at height 0 (visible only as the separator line).
-    task.defer(function()
+
+    -- openMain: make visible then tween to full height.
+    -- Called after the loading screen is gone (or immediately if no loader).
+    local function openMain()
+        if useKeySystem then return end    -- key system controls its own reveal
+        main.Visible = true
         task.defer(function()
             T(main, {Size = UDim2.new(0,620,0,FULL_H)}, 0.38, Enum.EasingStyle.Back)
         end)
-    end)
+    end
 
     -- ── Window object ─────────────────────────────────────────────────────────
     local Window = {
@@ -933,7 +937,11 @@ function Library:CreateWindow(Config)
         submitBtn.MouseButton1Click:Connect(function()
             if keyInp.Text == fetchedKey then
                 keyOverlay:Destroy(); keyCard:Destroy()
-                main.Visible = true; ctrlBar.Visible = true
+                ctrlBar.Visible = true
+                main.Visible = true
+                task.defer(function()
+                    T(main, {Size = UDim2.new(0,620,0,FULL_H)}, 0.38, Enum.EasingStyle.Back)
+                end)
                 Window:Notify("Access Granted", "Welcome back!", 3, "success")
             else
                 statusLbl.Text = "Invalid key. Please try again."
