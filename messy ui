@@ -116,8 +116,20 @@ local function randomGuiName()
 end
 
 -- ── Config file helpers ───────────────────────────────────────────────────────
+local CONFIG_FOLDER = "MessyHub Library"
+
+local function ensureFolder()
+    if makefolder and not isfolder(CONFIG_FOLDER) then
+        makefolder(CONFIG_FOLDER)
+    end
+end
+
+local function configPath(name)
+    return CONFIG_FOLDER .. "/" .. name .. ".json"
+end
+
 local function safeWrite(path, data)
-    if writefile then pcall(writefile, path, data) end
+    if writefile then ensureFolder(); pcall(writefile, path, data) end
 end
 local function safeRead(path)
     if readfile and isfile and isfile(path) then
@@ -139,13 +151,13 @@ end
 
 local function safeListConfigs(prefix)
     local results = {}
+    ensureFolder()
     if listfiles then
-        local ok, files = pcall(listfiles, "")
+        local ok, files = pcall(listfiles, CONFIG_FOLDER)
         if ok then
             for _, path in ipairs(files) do
                 local name = path:gsub("\\","/"):match("([^/]+)$") or path
-                -- Only include .json files that start with this script's prefix
-                if name:match("%.json$") and name:sub(1, #prefix) == prefix then
+                if name:match("%.json$") then
                     table.insert(results, name:sub(1, -6))
                 end
             end
@@ -476,7 +488,7 @@ function Library:CreateWindow(Config)
 
     function Window:DeleteConfig(customName)
         local baseName = sanitiseConfigName(customName, defaultConfigName)
-        local filePath = baseName .. ".json"
+        local filePath = configPath(baseName)
         if delfile then
             local ok = pcall(delfile, filePath)
             if ok then
@@ -488,11 +500,11 @@ function Library:CreateWindow(Config)
                         end
                     end
                 end
-                self:Notify("Config", "Deleted: " .. filePath, 2, "success")
+                self:Notify("Config", "Deleted: " .. baseName, 2, "success")
                 return true
             end
         end
-        self:Notify("Config", "Could not delete: " .. filePath, 2, "error")
+        self:Notify("Config", "Could not delete: " .. baseName, 2, "error")
         return false
     end
 
@@ -550,7 +562,7 @@ function Library:CreateWindow(Config)
     -- ── SaveConfig / LoadConfig ───────────────────────────────────────────────
     function Window:SaveConfig(customName)
         local baseName = sanitiseConfigName(customName, defaultConfigName)
-        local filePath = baseName .. ".json"
+        local filePath = configPath(baseName)
         local t = {}
         for _, e in ipairs(self._allElements) do
             t[e.id] = e.getValue()
@@ -578,7 +590,7 @@ function Library:CreateWindow(Config)
         if ok then
             safeWrite(filePath, encoded)
             registerConfig(defaultConfigName, baseName)
-            self:Notify("Config", "Saved as " .. filePath, 2, "success")
+            self:Notify("Config", "Saved as '" .. baseName .. "'", 2, "success")
         else
             self:Notify("Config", "Save failed.", 2, "error")
         end
@@ -586,7 +598,7 @@ function Library:CreateWindow(Config)
 
     function Window:LoadConfig(customName)
         local baseName = sanitiseConfigName(customName, defaultConfigName)
-        local filePath = baseName .. ".json"
+        local filePath = configPath(baseName)
         local raw = safeRead(filePath)
         if not raw then
             self:Notify("Config", "No config found: " .. filePath, 2, "warning")
