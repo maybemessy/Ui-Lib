@@ -144,7 +144,8 @@ local function safeListConfigs(prefix)
         if ok then
             for _, path in ipairs(files) do
                 local name = path:gsub("\\","/"):match("([^/]+)$") or path
-                if name:match("%.json$") then
+                -- Only include .json files that start with this script's prefix
+                if name:match("%.json$") and name:sub(1, #prefix) == prefix then
                     table.insert(results, name:sub(1, -6))
                 end
             end
