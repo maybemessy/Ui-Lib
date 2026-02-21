@@ -1,9 +1,10 @@
 --// MessyHub UI Library — v5.4
 -- v5.4 FIX 1: _activeDragFn/_activeEndFn hoisted to window scope — fixes sliders not sliding
---             in tabs 2+ and GUI drag lock never releasing (root cause: per-tab locals were
---             invisible to the single shared UIS listener registered on the first tab only)
+--             in tabs 2+ and GUI drag lock never releasing
 -- v5.4 FIX 2: _anySliderDragging always cleared in the shared InputEnded handler
 -- v5.4 FIX 3: Background transparency slider updates bgImageLabel.ImageTransparency live
+-- v5.4 FIX 4: Lock button now actually blocks drag — isLocked hoisted above the drag block
+--             so beginDrag reads the same variable the button toggles; removed duplicate connection
 -- v5.3 FIX 1: _cachedColor hoisted above hsvToRGB — fixes "attempt to index nil with 'R'" crash
 -- v5.3 FIX 2: ScreenGui name randomised + gethui/protect_gui/pcall layered parenting
 -- v5.3 FIX 3: Window:CreateThemeTab() — dedicated theme tab
@@ -929,10 +930,15 @@ function Library:CreateWindow(Config)
     end)
 
     -- ── Drag ──────────────────────────────────────────────────────────────────
+    -- isLocked is declared here so both the drag block and the lockBtn handler
+    -- reference the same variable. beginDrag checks it directly.
+    local isLocked = false
+
     do
         local dragging, dragStart, startPos = false, nil, nil
         local function beginDrag(inputPos)
-            if _anySliderDragging then return end
+            -- FIX: block drag when locked OR when a slider is being held
+            if isLocked or _anySliderDragging then return end
             dragging = true; dragStart = inputPos; startPos = main.Position
         end
         local function moveDrag(inputPos)
@@ -1089,19 +1095,21 @@ function Library:CreateWindow(Config)
 
     local showBtn = CtrlBtn("Hide")
     local lockBtn = CtrlBtn("Lock")
-    local isVis, isLocked = true, false
-
+    local isVis = true
+    -- isLocked is declared above the drag block so beginDrag can read it directly.
     showBtn.MouseButton1Click:Connect(function()
         isVis = not isVis
         main.Visible = isVis
         showBtn.Text = isVis and "Hide" or "Show"
     end)
+    -- FIX: single connection, updates the same isLocked the drag guard checks.
     lockBtn.MouseButton1Click:Connect(function()
         isLocked = not isLocked
-        Window._isLocked = isLocked
         lockBtn.Text = isLocked and "Unlock" or "Lock"
+        -- Visual feedback: tint the button when locked
+        T(lockBtn, {BackgroundColor3 = isLocked and Theme.AccentDark or Theme.BgElement2}, 0.12)
     end)
-    Window._isLocked = false
+    Window._isLocked = false  -- kept for external API compatibility
 
     tabSearchBox:GetPropertyChangedSignal("Text"):Connect(function()
         local q = tabSearchBox.Text:lower()
