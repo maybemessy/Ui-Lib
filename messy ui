@@ -1,402 +1,2481 @@
---// MessyHub v5.1 — Full Showcase Script
---// ┌─────────────────────────────────────────────────────────────────────┐
---// │  PATCHES APPLIED IN THIS BUILD                                      │
---// │  ─────────────────────────────────────────────────────────────────  │
---// │  FIX 1 — Config dropdown shows all saved names                      │
---// │  • safeListConfigs now lists ALL .json files, not just ones whose   │
---// │    filename starts with the hub prefix. Saving as "test" now        │
---// │    appears immediately in the dropdown.                             │
---// │                                                                     │
---// │  FIX 2 — Dropdown arrow icon now visible                            │
---// │  • Arrow uses plain "v" / "^" text instead of ▾/▴ Unicode glyphs.  │
---// │    GothamBold does not include those code points in Roblox, so     │
---// │    they rendered as blank squares / nothing.                        │
---// └─────────────────────────────────────────────────────────────────────┘
+--// MessyHub UI Library — v5.2
+-- Fixes: config save/load dropdown, theme background image, dropdown UI artifacts
+-- v5.1 PATCH: safeListConfigs now lists ALL .json files (not prefix-filtered)
+-- v5.1 PATCH: dropdown arrow uses ASCII v/^ (GothamBold missing ▾/▴ glyphs)
+-- v5.2 OPT 1: Cursor ring moved from RenderStepped → Heartbeat (no render coupling needed)
+-- v5.2 OPT 2: FPS counter + watermark FPS moved from RenderStepped → Heartbeat
+-- v5.2 OPT 3: Spinner uses RenderStepped only while visible; self-disconnects on destroy
+-- v5.2 OPT 4: double task.defer replaced with RunService.Stepped:Wait() once
+-- v5.2 OPT 5: SetTheme accentObjs loop skips dead refs without pcall overhead
+-- v5.2 OPT 6: Color picker — single Color3.fromHSV call shared across fireCallback/syncRGB/toHex
+-- v5.2 OPT 7: Dropdown/SearchBar text filter debounced (no redundant loop on every keystroke)
+-- v5.2 OPT 8: selectTab caches scrollFrames list instead of GetChildren() every call
+-- v5.2 OPT 9: Slider/StepSlider/ColorPicker global InputChanged/InputEnded share one connection each
 
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/maybemessy/Ui-Lib/refs/heads/main/messy%20ui"))()
+local Library = {}
 
--- ── Window ────────────────────────────────────────────────────────────────────
-local Window = Library:CreateWindow({
-    Name          = "MessyHub v5.1",
-    UseKeySystem  = false,
-    KeyUrl        = "https://pastebin.com/raw/QiV2bNd7",
-    GetUrl        = "https://lootdest.org/s?eKiCaVks",
-    ConfigFile    = "messyhub_tb3",
-    LoadingScreen = true,
-    CursorRing    = true,
-})
+-- ── Services ──────────────────────────────────────────────────────────────────
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local TweenService     = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui          = game:GetService("CoreGui")
+local LP               = Players.LocalPlayer
 
-Window:Watermark("MessyHub v5.1  |  {fps} fps")
+-- ── Theme ─────────────────────────────────────────────────────────────────────
+local Theme = {
+    Accent        = Color3.fromRGB(170, 0, 255),
+    AccentDark    = Color3.fromRGB(70,  0, 110),
+    BgMain        = Color3.fromRGB(18,  18,  20),
+    BgSidebar     = Color3.fromRGB(13,  13,  16),
+    BgContent     = Color3.fromRGB(10,  10,  13),
+    BgElement     = Color3.fromRGB(26,  26,  31),
+    BgElement2    = Color3.fromRGB(36,  36,  43),
+    TextPrimary   = Color3.fromRGB(238, 238, 238),
+    TextSecondary = Color3.fromRGB(155, 155, 172),
+    TextAccent    = Color3.fromRGB(195, 110, 255),
+    Danger        = Color3.fromRGB(200,  45,  45),
+    Success       = Color3.fromRGB(60,  200, 100),
+    Warning       = Color3.fromRGB(230, 170,  30),
+}
 
--- ── Tabs ──────────────────────────────────────────────────────────────────────
-local MainTab   = Window:CreateTab("Main",      "M")
-local PlayerTab = Window:CreateTab("Players",   "P")
-local VisualTab = Window:CreateTab("Visuals",   "V")
-local MiscTab   = Window:CreateTab("Misc",      "X")
-local ThemeTab  = Window:CreateTab("Theme",     "T")
-local ConfigTab = Window:CreateTab("Config",    "C")
-local LogTab    = Window:CreateTab("Changelog", "!")
-
--- ════════════════════════════════════════════════════════════════════════════
--- MAIN TAB
--- ════════════════════════════════════════════════════════════════════════════
-MainTab:CreateDivider("Duplication")
-
-MainTab:CreateButton("Item Dupe", function()
-    Window:Notify("Success", "Items duplicated!", 3, "success")
-end, "Duplicates all items in your inventory")
-
-MainTab:CreateConfirmButton("Delete All Items", function()
-    Window:Notify("Deleted", "All items removed.", 3, "error")
-end)
-
-MainTab:CreateDivider("Movement")
-
-local speedSlider = MainTab:CreateSlider("WalkSpeed", 16, 500, 16, function(value)
-    local char = game.Players.LocalPlayer.Character
-    if char and char:FindFirstChild("Humanoid") then
-        char.Humanoid.WalkSpeed = value
-    end
-end)
-
-local jumpSlider = MainTab:CreateSlider("JumpPower", 50, 500, 50, function(value)
-    local char = game.Players.LocalPlayer.Character
-    if char and char:FindFirstChild("Humanoid") then
-        char.Humanoid.JumpPower = value
-    end
-end)
-
-MainTab:CreateStepSlider("Gravity Preset", {"Moon", "Low", "Normal", "High", "Void"}, 3, function(value)
-    Window:Notify("Gravity", "Set to: " .. value, 2, "info")
-end)
-
-MainTab:CreateDivider("Teleport")
-
-local tpDropdown = MainTab:CreateDropdown("Select Teleport", {
-    "Bank", "Gun Shop", "Gas Station", "Hospital", "Police Station", "Jail"
-}, function(selected)
-    Window:Notify("Teleport", "Going to: " .. selected, 2, "info")
-end)
-
-local cheatDropdown = MainTab:CreateMultiDropdown("Active Cheats", {
-    "No Clip", "Fly", "Speed Boost", "Infinite Ammo", "God Mode", "Anti-Ragdoll"
-}, function(selected)
-    if #selected > 0 then
-        Window:Notify("Cheats", table.concat(selected, ", "), 2, "success")
-    else
-        Window:Notify("Cheats", "All cheats disabled", 2, "info")
-    end
-end)
-
--- ════════════════════════════════════════════════════════════════════════════
--- PLAYERS TAB
--- ════════════════════════════════════════════════════════════════════════════
-PlayerTab:CreateLabel("Control other players in the server.")
-PlayerTab:CreateDivider("Toggles")
-
-local bringToggle = PlayerTab:CreateToggle("Bring All Loop", false, function(state)
-    _G.isBringingAll = state
-    Window:Notify("Bring", state and "Bring All ON" or "Bring All OFF", 2, state and "success" or "info")
-end)
-
-PlayerTab:CreateToggle("Kill Aura", false, function(state)
-    Window:Notify("Kill Aura", state and "ON" or "OFF", 2, state and "success" or "info")
-end)
-
-PlayerTab:CreateToggle("Infinite Stamina", false, function(state)
-    Window:Notify("Stamina", state and "Infinite Stamina ON" or "OFF", 2, state and "success" or "info")
-end)
-
-PlayerTab:CreateDivider("Target Mode")
-
-PlayerTab:CreateRadioGroup("Priority Target", {
-    "Nearest", "Furthest", "Lowest HP", "Random"
-}, 1, function(value)
-    Window:Notify("Target", "Mode: " .. value, 2, "info")
-end)
-
-PlayerTab:CreateDivider("Server Info")
-
-PlayerTab:CreateBadge("Script Version", "v5.1",  Color3.fromRGB(80, 200, 100))
-PlayerTab:CreateBadge("Status",         "Active", Color3.fromRGB(170, 0, 255))
-PlayerTab:CreateBadge("Ping",           "32ms",   Color3.fromRGB(60, 160, 255))
-
-PlayerTab:CreateDivider("Player List")
-
-PlayerTab:CreateTable(
-    {"Player", "Team", "HP"},
-    {
-        {"Player1", "Red",   "100"},
-        {"Player2", "Blue",  "75"},
-        {"Player3", "Red",   "50"},
-        {"Player4", "Blue",  "100"},
-        {"Player5", "Green", "25"},
-    }
-)
-
-PlayerTab:CreateDivider("Search")
-PlayerTab:CreateSearchBar("Filter this tab...")
-
--- ════════════════════════════════════════════════════════════════════════════
--- VISUALS TAB
--- ════════════════════════════════════════════════════════════════════════════
-VisualTab:CreateDivider("ESP")
-
-local espSection = VisualTab:CreateSection("ESP Settings")
-espSection:AddLabel("Toggle individual ESP layers")
-espSection:AddButton("Box ESP",      function() Window:Notify("ESP", "Box ESP toggled",      2, "success") end)
-espSection:AddButton("Name ESP",     function() Window:Notify("ESP", "Name ESP toggled",     2, "success") end)
-espSection:AddButton("Health Bars",  function() Window:Notify("ESP", "Health Bars toggled",  2, "success") end)
-espSection:AddButton("Distance Tag", function() Window:Notify("ESP", "Distance Tag toggled", 2, "success") end)
-
-VisualTab:CreateDivider("Colors")
-
-VisualTab:CreateColorPicker("ESP Color",   Color3.fromRGB(255, 0,   255), function(c) end)
-VisualTab:CreateColorPicker("Chams Color", Color3.fromRGB(0,   200, 255), function(c) end)
-
-VisualTab:CreateDivider("Live Stats")
-
-local hpBar    = VisualTab:CreateProgressBar("Player HP",  100, 100)
-local armorBar = VisualTab:CreateProgressBar("Armor",       60, 100)
-local ammoBar  = VisualTab:CreateProgressBar("Ammo",        30,  30)
-
-VisualTab:CreateButton("Simulate Damage", function()
-    hpBar:SetValue(math.random(10, 90))
-    armorBar:SetValue(math.random(0, 60))
-    ammoBar:SetValue(math.random(0, 30))
-    Window:Notify("Sim", "Stats randomized", 2, "warning")
-end)
-
-VisualTab:CreateDivider("Keybinds")
-VisualTab:CreateKeybind("Toggle ESP",     Enum.KeyCode.F1, function(k) Window:Notify("Bind", "ESP via "     .. k.Name, 2, "info") end)
-VisualTab:CreateKeybind("Toggle Fly",     Enum.KeyCode.F2, function(k) Window:Notify("Bind", "Fly via "     .. k.Name, 2, "info") end)
-VisualTab:CreateKeybind("Toggle No-Clip", Enum.KeyCode.F3, function(k) Window:Notify("Bind", "No-Clip via " .. k.Name, 2, "info") end)
-
--- ════════════════════════════════════════════════════════════════════════════
--- MISC TAB
--- ════════════════════════════════════════════════════════════════════════════
-MiscTab:CreateDivider("Text Inputs")
-MiscTab:CreateLabel("Callback fires on every keystroke — no Enter needed.")
-
-MiscTab:CreateInput("Target player name...", "", function(v)
-    -- fires live as you type
-end)
-
-MiscTab:CreateInput("Custom teleport tag...", "", function(v)
-    -- fires live as you type
-end)
-
-MiscTab:CreateDivider("Slider Fix Demo")
-MiscTab:CreateLabel("Drag the slider — the window stays still.")
-
-MiscTab:CreateSlider("Test Slider (drag me!)", 0, 100, 50, function(v) end)
-
-MiscTab:CreateDivider("Test Notifications")
-MiscTab:CreateButton("Info",    function() Window:Notify("Info",    "This is an info notification.",    3, "info")    end)
-MiscTab:CreateButton("Success", function() Window:Notify("Success", "This is a success notification.", 3, "success") end)
-MiscTab:CreateButton("Warning", function() Window:Notify("Warning", "This is a warning notification.", 3, "warning") end)
-MiscTab:CreateButton("Error",   function() Window:Notify("Error",   "This is an error notification.",  3, "error")   end)
-
-MiscTab:CreateDivider("Navigation")
-MiscTab:CreateButton("Go to Config Tab",    function() Window:SetTab("Config")    end)
-MiscTab:CreateButton("Go to Theme Tab",     function() Window:SetTab("Theme")     end)
-MiscTab:CreateButton("Go to Changelog Tab", function() Window:SetTab("Changelog") end)
-
--- ════════════════════════════════════════════════════════════════════════════
--- THEME TAB
--- ════════════════════════════════════════════════════════════════════════════
-ThemeTab:CreateDivider("Accent Presets")
-ThemeTab:CreateLabel("One-click presets — every accent element repaints instantly.")
-
-for _, presetName in ipairs(Window:GetThemePresets()) do
-    ThemeTab:CreateButton(presetName, function()
-        Window:ApplyThemePreset(presetName)
-        Window:Notify("Theme", presetName .. " applied!", 2, "success")
-    end, "Apply the " .. presetName .. " accent colour")
+-- ── Micro-helpers ─────────────────────────────────────────────────────────────
+local function T(obj, props, t, style, dir)
+    if not obj or not obj.Parent then return end
+    TweenService:Create(obj,
+        TweenInfo.new(t or 0.18,
+            style or Enum.EasingStyle.Quad,
+            dir   or Enum.EasingDirection.Out),
+        props):Play()
 end
 
-ThemeTab:CreateDivider("Custom Accent")
-ThemeTab:CreateLabel("HSV wheel + RGB sliders — both fully synced.")
+local function Corner(p, r)
+    local c = Instance.new("UICorner", p)
+    c.CornerRadius = UDim.new(0, r or 6)
+    return c
+end
 
-ThemeTab:CreateColorPicker("UI Accent", Color3.fromRGB(170, 0, 255), function(c)
-    Window:SetTheme(c)
-end)
+local function Stroke(p, col, thick, trans)
+    local s = Instance.new("UIStroke", p)
+    s.Color       = col   or Theme.Accent
+    s.Thickness   = thick or 1
+    s.Transparency= trans or 0.55
+    return s
+end
 
-ThemeTab:CreateDivider("Window Options")
+local function Frame(parent, props)
+    local f = Instance.new("Frame", parent)
+    f.BorderSizePixel = 0
+    for k,v in pairs(props or {}) do f[k] = v end
+    return f
+end
 
-ThemeTab:CreateToggle("Show Watermark", true, function(state)
-    if state then
-        Window:Watermark("MessyHub v5.1  |  {fps} fps")
-    else
-        Window:Watermark("")
-    end
-end)
+local function Label(parent, props)
+    local l = Instance.new("TextLabel", parent)
+    l.BackgroundTransparency = 1
+    l.Font      = Enum.Font.Gotham
+    l.TextSize  = 13
+    l.TextColor3= Theme.TextPrimary
+    for k,v in pairs(props or {}) do l[k] = v end
+    return l
+end
 
-ThemeTab:CreateToggle("Cursor Ring", true, function(state)
-    Window:ToggleCursorRing(state)
-    Window:Notify("Cursor Ring", state and "Enabled" or "Disabled", 2, "info")
-end)
+local function Btn(parent, props)
+    local b = Instance.new("TextButton", parent)
+    b.BorderSizePixel  = 0
+    b.AutoButtonColor  = false
+    b.Font             = Enum.Font.GothamSemibold
+    b.TextSize         = 13
+    b.TextColor3       = Theme.TextPrimary
+    for k,v in pairs(props or {}) do b[k] = v end
+    return b
+end
 
--- ════════════════════════════════════════════════════════════════════════════
--- CONFIG TAB
--- ════════════════════════════════════════════════════════════════════════════
-ConfigTab:CreateBadge("Save Location", "executor/workspace/", Color3.fromRGB(100, 100, 160))
-ConfigTab:CreateBadge("Version",       "v5.1",                Color3.fromRGB(80,  200, 100))
+local function Box(parent, props)
+    local b = Instance.new("TextBox", parent)
+    b.BorderSizePixel    = 0
+    b.ClearTextOnFocus   = false
+    b.Font               = Enum.Font.Gotham
+    b.TextSize           = 13
+    b.TextColor3         = Theme.TextPrimary
+    b.PlaceholderColor3  = Theme.TextSecondary
+    b.BackgroundColor3   = Theme.BgElement
+    for k,v in pairs(props or {}) do b[k] = v end
+    return b
+end
 
--- ── Profile name ──────────────────────────────────────────────────────────────
-ConfigTab:CreateDivider("Profile Name")
-ConfigTab:CreateLabel("Type any name and click Save. The dropdown will update automatically.")
-
-local configName = "messyhub_tb3"
-
-local nameInput = ConfigTab:CreateInput(
-    "Config name  (e.g. test, pvp_run1)",
-    configName,
-    function(typed)
-        -- Sanitise: strip special chars, collapse spaces to underscores
-        local s = tostring(typed):gsub("[^%w%s%-_]",""):gsub("%s+","_"):match("^%s*(.-)%s*$")
-        -- Only update when non-empty — keeps last good name while mid-type
-        if s ~= "" then
-            configName = s
+local function throttle(fn, interval)
+    local last = 0
+    return function(...)
+        local now = os.clock()
+        if now - last >= interval then
+            last = now
+            fn(...)
         end
     end
-)
-
--- ── Saved Configs dropdown ────────────────────────────────────────────────────
--- FIX: dropdown now shows ALL .json files, not just prefix-filtered ones
-ConfigTab:CreateDivider("Saved Configs")
-ConfigTab:CreateLabel("All .json files in your workspace appear here automatically.")
-
-local function getSavedList()
-    local list = Window:ListSavedConfigs()
-    if #list == 0 then return {"(no saves yet)"} end
-    return list
 end
 
-local savedDropdown = ConfigTab:CreateDropdown("Saved Profiles", getSavedList(), function(chosen)
-    if chosen ~= "(no saves yet)" then
-        nameInput:SetValue(chosen)
-        configName = chosen
-        Window:Notify("Config", "Selected: " .. chosen, 2, "info")
+-- ── Config file helpers ───────────────────────────────────────────────────────
+local function safeWrite(path, data)
+    if writefile then pcall(writefile, path, data) end
+end
+local function safeRead(path)
+    if readfile and isfile and isfile(path) then
+        local ok, data = pcall(readfile, path)
+        return ok and data or nil
     end
-end)
+end
 
--- Refresh every time the Config tab is opened
-Window:OnTabOpen("Config", function()
-    savedDropdown:RefreshOptions(getSavedList())
-end)
+-- In-memory registry of saved configs per hub prefix
+local _configRegistry = {}  -- [hubPrefix] = {name1, name2, ...}
 
--- ── Save / Load ───────────────────────────────────────────────────────────────
-ConfigTab:CreateDivider("Save & Load")
+local function registerConfig(prefix, baseName)
+    if not _configRegistry[prefix] then _configRegistry[prefix] = {} end
+    for _, v in ipairs(_configRegistry[prefix]) do
+        if v == baseName then return end
+    end
+    table.insert(_configRegistry[prefix], baseName)
+    table.sort(_configRegistry[prefix])
+end
 
-ConfigTab:CreateButton("Save Config", function()
-    Window:SaveConfig(configName)
-    -- FIX: refresh immediately so the new name appears in the dropdown
-    savedDropdown:RefreshOptions(getSavedList())
-end, "Saves all settings to executor/workspace/<name>.json")
+-- FIX: List ALL .json files in workspace — do NOT filter by prefix.
+-- Previously the prefix filter (^messyhub_tb3.*%.json$) caused any config
+-- saved under a different name (e.g. "test") to be invisible in the dropdown.
+local function safeListConfigs(prefix)
+    local results = {}
+    if listfiles then
+        local ok, files = pcall(listfiles, "")
+        if ok then
+            for _, path in ipairs(files) do
+                local name = path:gsub("\\","/"):match("([^/]+)$") or path
+                -- PATCHED: match any .json file, not just prefix-prefixed ones
+                if name:match("%.json$") then
+                    table.insert(results, name:sub(1, -6))
+                end
+            end
+            table.sort(results)
+            for _, n in ipairs(results) do registerConfig(prefix, n) end
+            return results
+        end
+    end
+    -- Fallback: use in-memory registry
+    return _configRegistry[prefix] or {}
+end
 
-ConfigTab:CreateButton("Load Config", function()
-    Window:LoadConfig(configName)
-end, "Loads settings from executor/workspace/<name>.json")
+local function sanitiseConfigName(raw, fallback)
+    local s = tostring(raw or ""):gsub("[^%w%s%-_]", ""):gsub("%s+", "_"):match("^%s*(.-)%s*$")
+    if s == "" then return fallback end
+    return s
+end
 
--- ── Delete ────────────────────────────────────────────────────────────────────
-ConfigTab:CreateDivider("Delete")
+-- ─────────────────────────────────────────────────────────────────────────────
+function Library:CreateWindow(Config)
+    local hubName      = Config.Name         or "MessyHub"
+    local useKeySystem = Config.UseKeySystem
+    local keyUrl       = Config.KeyUrl       or "https://pastebin.com/raw/QiV2bNd7"
+    local getUrl       = Config.GetUrl       or "https://lootdest.org/s?eKiCaVks"
+    local defaultConfigName = Config.ConfigFile or (hubName:gsub("%s","_") .. "_config")
+    local showLoader   = Config.LoadingScreen ~= false
+    local showCursor   = Config.CursorRing   ~= false
+    local bgImageUrl   = Config.BackgroundImage or nil
+    local bgImageTrans = Config.BackgroundImageTransparency or 0.85
 
-ConfigTab:CreateConfirmButton("Delete Selected Config", function()
-    Window:DeleteConfig(configName)
-    configName = "messyhub_tb3"
-    nameInput:SetValue(configName)
-    savedDropdown:RefreshOptions(getSavedList())
-end)
+    if Config.AccentColor then
+        Theme.Accent     = Config.AccentColor
+        Theme.AccentDark = Color3.new(
+            Config.AccentColor.R * 0.35,
+            Config.AccentColor.G * 0.35,
+            Config.AccentColor.B * 0.35)
+    end
 
--- ── Quick Presets ─────────────────────────────────────────────────────────────
-ConfigTab:CreateDivider("Quick Presets")
+    -- ── ScreenGui ─────────────────────────────────────────────────────────────
+    local sg = Instance.new("ScreenGui")
+    sg.Name           = "MessyHub"
+    sg.ResetOnSpawn   = false
+    sg.IgnoreGuiInset = true
+    sg.DisplayOrder   = 99999999
 
-ConfigTab:CreateButton("Reset to Defaults", function()
-    speedSlider:SetValue(16)
-    jumpSlider:SetValue(50)
-    bringToggle:SetValue(false)
-    cheatDropdown:SetValue({})
-    tpDropdown:SetValue("Bank")
-    Window:Notify("Reset", "All settings back to default.", 3, "warning")
-end, "Resets every setting to its default value")
+    if gethui then
+        sg.Parent = gethui()
+    elseif syn and syn.protect_gui then
+        syn.protect_gui(sg)
+        sg.Parent = CoreGui
+    else
+        sg.Parent = CoreGui
+    end
 
-ConfigTab:CreateButton("Preset: Grind", function()
-    speedSlider:SetValue(60)
-    jumpSlider:SetValue(80)
-    cheatDropdown:SetValue({"Speed Boost", "Infinite Ammo"})
-    Window:Notify("Preset", "Grind preset applied!", 3, "success")
-end, "WalkSpeed 60, JumpPower 80, Speed Boost + Infinite Ammo")
+    local connections = {}
+    local function conn(c) table.insert(connections, c) end
 
-ConfigTab:CreateButton("Preset: PVP", function()
-    speedSlider:SetValue(120)
-    jumpSlider:SetValue(150)
-    cheatDropdown:SetValue({"No Clip", "God Mode"})
-    Window:Notify("Preset", "PVP preset applied!", 3, "success")
-end, "WalkSpeed 120, JumpPower 150, No Clip + God Mode")
+    local savedState = {}
+    local accentObjs = {}
+    local function regAccent(obj, prop)
+        table.insert(accentObjs, {obj=obj, prop=prop or "BackgroundColor3"})
+    end
 
-ConfigTab:CreateButton("Preset: Explorer", function()
-    speedSlider:SetValue(80)
-    jumpSlider:SetValue(200)
-    cheatDropdown:SetValue({"Fly", "No Clip"})
-    Window:Notify("Preset", "Explorer preset applied!", 3, "success")
-end, "WalkSpeed 80, JumpPower 200, Fly + No Clip")
+    -- ── Notification Container ────────────────────────────────────────────────
+    local notifContainer = Frame(sg, {
+        Name = "Notifs",
+        Size = UDim2.new(0,275,1,-20),
+        Position = UDim2.new(1,-285,0,10),
+        BackgroundTransparency = 1,
+        ZIndex = 100,
+    })
+    do
+        local nl = Instance.new("UIListLayout", notifContainer)
+        nl.VerticalAlignment   = Enum.VerticalAlignment.Bottom
+        nl.HorizontalAlignment = Enum.HorizontalAlignment.Right
+        nl.SortOrder           = Enum.SortOrder.LayoutOrder
+        nl.Padding             = UDim.new(0,8)
+    end
 
--- ── Suggestions ───────────────────────────────────────────────────────────────
-ConfigTab:CreateDivider("Suggestions")
-local suggestSection = ConfigTab:CreateSection("Ideas for future features")
-suggestSection:AddLabel("1. Auto-save on close — write config on window destroy")
-suggestSection:AddLabel("2. Config export — copy JSON to clipboard for sharing")
-suggestSection:AddLabel("3. Global hotkey to toggle the GUI open/closed")
-suggestSection:AddLabel("4. Notification history log — scroll back through toasts")
-suggestSection:AddLabel("5. Profile import — paste JSON string to load without a file")
-suggestSection:AddLabel("6. Window opacity slider in Theme tab")
-suggestSection:AddLabel("7. Sidebar icon-only collapse mode to save horizontal space")
-suggestSection:AddLabel("8. Live ping / player count badge in the watermark")
+    -- ── Cursor Ring ───────────────────────────────────────────────────────────
+    local cursorRing
+    if showCursor then
+        cursorRing = Frame(sg, {
+            Size = UDim2.new(0,20,0,20),
+            BackgroundTransparency = 1,
+            ZIndex = 998,
+        })
+        local ring = Frame(cursorRing, {
+            Size = UDim2.new(1,0,1,0),
+            BackgroundTransparency = 1,
+        })
+        Corner(ring, 10)
+        Stroke(ring, Theme.Accent, 1.5, 0.3)
+        -- OPT: Heartbeat is sufficient for cursor tracking; no need for RenderStepped
+        conn(RunService.Heartbeat:Connect(function()
+            local mp = UserInputService:GetMouseLocation()
+            cursorRing.Position = UDim2.new(0, mp.X - 10, 0, mp.Y - 10)
+        end))
+    end
 
--- ── Danger Zone ───────────────────────────────────────────────────────────────
-ConfigTab:CreateDivider("Danger Zone")
+    -- ── Main Frame ────────────────────────────────────────────────────────────
+    local FULL_H = 370
+    local main = Frame(sg, {
+        Size             = UDim2.new(0,620,0,0),
+        Position         = UDim2.new(0.5,-310,0.5,-185),
+        BackgroundColor3 = Theme.BgMain,
+        Active           = true,
+        Draggable        = false,
+        Visible          = false,
+        ClipsDescendants = true,
+    })
+    Corner(main, 10)
+    local mainStroke = Stroke(main, Theme.Accent, 1, 0.45)
+    regAccent(mainStroke, "Color")
 
-ConfigTab:CreateConfirmButton("Destroy Window", function()
-    Window:Destroy()
-end)
+    local _anySliderDragging = false
 
--- ════════════════════════════════════════════════════════════════════════════
--- CHANGELOG TAB
--- ════════════════════════════════════════════════════════════════════════════
-LogTab:CreateBadge("Release", "MessyHub v5.1", Color3.fromRGB(170, 0, 255))
-LogTab:CreateBadge("Status",  "Stable",        Color3.fromRGB(80, 200, 100))
+    -- ── Background Image Layer ────────────────────────────────────────────────
+    local bgImageLabel = nil
+    local function applyBgImage(url, trans)
+        if not url or url == "" then
+            if bgImageLabel then bgImageLabel.Visible = false end
+            pcall(function() sidebar.BackgroundTransparency     = 0 end)
+            pcall(function() contentArea.BackgroundTransparency = 0 end)
+            pcall(function() main.BackgroundTransparency        = 0 end)
+            return
+        end
+        if not bgImageLabel then
+            bgImageLabel = Instance.new("ImageLabel", main)
+            bgImageLabel.Name                   = "BgImage"
+            bgImageLabel.Size                   = UDim2.new(1,0,1,0)
+            bgImageLabel.Position               = UDim2.new(0,0,0,0)
+            bgImageLabel.BackgroundTransparency = 1
+            bgImageLabel.ScaleType              = Enum.ScaleType.Crop
+            bgImageLabel.ZIndex                 = 1
+            Corner(bgImageLabel, 10)
+        end
+        bgImageLabel.Image             = url
+        bgImageLabel.ImageTransparency = trans or bgImageTrans
+        bgImageLabel.Visible           = true
+        pcall(function() main.BackgroundTransparency        = 0.15 end)
+        pcall(function() sidebar.BackgroundTransparency     = 0.55 end)
+        pcall(function() contentArea.BackgroundTransparency = 0.60 end)
+    end
+    if bgImageUrl then
+        task.defer(function() applyBgImage(bgImageUrl, bgImageTrans) end)
+    end
 
-LogTab:CreateDivider("Bug Fixes")
+    local function openMain()
+        if useKeySystem then return end
+        main.Visible = true
+        task.defer(function()
+            T(main, {Size = UDim2.new(0,620,0,FULL_H)}, 0.38, Enum.EasingStyle.Back)
+        end)
+    end
 
-local fixSection = LogTab:CreateSection("Slider drags window (FIXED)")
-fixSection:AddLabel("BEFORE: Dragging any slider moved the entire GUI window.")
-fixSection:AddLabel("AFTER: Window drag is now manual, title bar only. A shared _anySliderDragging flag blocks the title bar while any slider is held.")
+    -- ── Loading Screen ────────────────────────────────────────────────────────
+    if showLoader then
+        local loader = Frame(sg, {
+            Size = UDim2.new(1,0,1,0),
+            BackgroundColor3 = Theme.BgMain,
+            ZIndex = 999,
+        })
+        local spinner = Frame(loader, {
+            Size = UDim2.new(0,22,0,22),
+            Position = UDim2.new(0.5,-11,0.5,-22),
+            BackgroundColor3 = Theme.Accent,
+            Rotation = 45,
+            ZIndex = 1000,
+        })
+        Corner(spinner, 4)
+        local spinInner = Frame(spinner, {
+            Size = UDim2.new(0,10,0,10),
+            Position = UDim2.new(0.5,-5,0.5,-5),
+            BackgroundColor3 = Theme.BgMain,
+            ZIndex = 1001,
+        })
+        Corner(spinInner, 2)
+        Label(loader, {
+            Size = UDim2.new(1,0,0,20),
+            Position = UDim2.new(0,0,0.5,10),
+            Text = "Loading " .. hubName .. "...",
+            Font = Enum.Font.GothamBold,
+            TextSize = 13,
+            TextColor3 = Theme.TextSecondary,
+            ZIndex = 1000,
+        })
+        -- OPT: spinner only runs while the loader exists; self-disconnects on Destroy
+        local spinConn
+        spinConn = RunService.RenderStepped:Connect(function(dt)
+            if spinner and spinner.Parent then
+                spinner.Rotation = spinner.Rotation + 180 * dt
+            else
+                spinConn:Disconnect()
+            end
+        end)
+        task.delay(1.2, function()
+            T(loader, {BackgroundTransparency = 1}, 0.4)
+            task.wait(0.45)
+            if loader and loader.Parent then loader:Destroy() end
+            spinConn:Disconnect()
+            openMain()
+        end)
+    else
+        openMain()
+    end
 
-local inputSection = LogTab:CreateSection("Config name ignored on Save (FIXED)")
-inputSection:AddLabel("BEFORE: Typing a name then clicking Save used the old value unless Enter was pressed first.")
-inputSection:AddLabel("AFTER: Input fires on every keystroke. Clearing the box keeps the last valid name until a new one is typed.")
+    -- ── Window object ─────────────────────────────────────────────────────────
+    local Window = {
+        _tabs               = {},
+        _activeTab          = nil,
+        _activeStrip        = nil,
+        _activeIcon         = nil,
+        _activeIconBox      = nil,
+        _activeTabName      = nil,
+        _accentColor        = Theme.Accent,
+        _watermark          = nil,
+        _allElements        = {},
+        _tabOpenCallbacks   = {},
+        _scrollFrames       = {},   -- OPT: shared scroll frame list for tab switching
+        _sharedInputChangedConn = false,
+        _tabBtnCache        = {},   -- OPT: cached tab button list for search filter
+    }
 
-local ddSection = LogTab:CreateSection("Saved Configs dropdown empty (FIXED)")
-ddSection:AddLabel("BEFORE: Dropdown showed '(no saves found)' even after saving 'test' — the prefix filter required filenames to start with 'messyhub_tb3'.")
-ddSection:AddLabel("AFTER: safeListConfigs now lists ALL .json files. Any name you save appears immediately.")
+    function Window:GetTheme() return self._accentColor end
 
-local arrowSection = LogTab:CreateSection("Dropdown arrow invisible (FIXED)")
-arrowSection:AddLabel("BEFORE: The ▾/▴ glyphs rendered as blank because GothamBold in Roblox doesn't include those Unicode code points.")
-arrowSection:AddLabel("AFTER: Arrow uses plain 'v' / '^' ASCII characters which render correctly in every Roblox font.")
+    -- ── SetTheme ──────────────────────────────────────────────────────────────
+    function Window:SetTheme(color)
+        self._accentColor = color
+        Theme.Accent      = color
+        Theme.AccentDark  = Color3.new(color.R*0.35, color.G*0.35, color.B*0.35)
+        Theme.TextAccent  = Color3.new(
+            math.min(color.R + 0.15, 1),
+            math.min(color.G + 0.05, 1),
+            math.min(color.B + 0.10, 1)
+        )
+        -- OPT: direct check instead of pcall per object — avoids exception overhead on every theme change
+        for i = #accentObjs, 1, -1 do
+            local e = accentObjs[i]
+            if e.obj and e.obj.Parent then
+                e.obj[e.prop] = color
+            else
+                table.remove(accentObjs, i)  -- prune dead refs
+            end
+        end
+        pcall(function()
+            sepG.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0,    Color3.new(0,0,0)),
+                ColorSequenceKeypoint.new(0.25, color),
+                ColorSequenceKeypoint.new(0.75, color),
+                ColorSequenceKeypoint.new(1,    Color3.new(0,0,0)),
+            })
+        end)
+        pcall(function()
+            local r,g,b = color.R*0.12, color.G*0.02, color.B*0.20
+            sideG.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, Color3.new(r,g,b)),
+                ColorSequenceKeypoint.new(1, Color3.fromRGB(8,8,10)),
+            })
+        end)
+        pcall(function() iconOuter.BackgroundColor3 = color end)
+        if self._watermark then
+            local s = self._watermark:FindFirstChildOfClass("UIStroke")
+            if s then s.Color = color end
+        end
+        pcall(function()
+            local ms = main:FindFirstChildOfClass("UIStroke")
+            if ms then ms.Color = color end
+        end)
+    end
 
-LogTab:CreateDivider("Mobile / Touch Support")
+    function Window:SetBackgroundImage(url, transparency)
+        bgImageTrans = transparency ~= nil and transparency or bgImageTrans
+        applyBgImage(url, bgImageTrans)
+    end
 
-local touchSection = LogTab:CreateSection("Touch input added everywhere")
-touchSection:AddLabel("Sliders, color picker (wheel + V + RGB sliders), toggles, title bar drag, and control bar drag all handle Touch input alongside mouse.")
+    function Window:ClearBackgroundImage()
+        applyBgImage("", 1)
+    end
 
-LogTab:CreateDivider("New API")
+    -- ── Built-in theme presets ────────────────────────────────────────────────
+    local ThemePresets = {
+        ["Purple"]   = Color3.fromRGB(170,  0, 255),
+        ["Crimson"]  = Color3.fromRGB(220,  30,  70),
+        ["Cyan"]     = Color3.fromRGB(  0, 210, 240),
+        ["Emerald"]  = Color3.fromRGB( 20, 210,  90),
+        ["Gold"]     = Color3.fromRGB(235, 175,  20),
+        ["Rose"]     = Color3.fromRGB(255,  80, 160),
+        ["Ice"]      = Color3.fromRGB(120, 200, 255),
+        ["Sunset"]   = Color3.fromRGB(255, 110,  50),
+    }
 
-local apiSection = LogTab:CreateSection("Methods added in v5.1")
-apiSection:AddLabel("Dropdown:RefreshOptions(list)  — repopulate a dropdown live")
-apiSection:AddLabel("Window:OnTabOpen(name, fn)     — callback fired when tab is selected")
-apiSection:AddLabel("Window:ToggleCursorRing(bool)  — show/hide the cursor ring")
-apiSection:AddLabel("Window:SetTheme(Color3)        — live accent colour repaint")
-apiSection:AddLabel("Window:ApplyThemePreset(name)  — one of 8 built-in presets")
-apiSection:AddLabel("Window:ListSavedConfigs()      — returns table of all .json saves")
-apiSection:AddLabel("Window:DeleteConfig(name)      — deletes a config .json file")
+    function Window:GetThemePresets()
+        local names = {}
+        for k in pairs(ThemePresets) do table.insert(names, k) end
+        table.sort(names)
+        return names
+    end
+
+    function Window:ApplyThemePreset(presetName)
+        local col = ThemePresets[presetName]
+        if col then self:SetTheme(col) end
+    end
+
+    -- ── Config file management ────────────────────────────────────────────────
+    function Window:ListSavedConfigs()
+        return safeListConfigs(defaultConfigName)
+    end
+
+    function Window:DeleteConfig(customName)
+        local baseName = sanitiseConfigName(customName, defaultConfigName)
+        local filePath = baseName .. ".json"
+        if delfile then
+            local ok = pcall(delfile, filePath)
+            if ok then
+                if _configRegistry[defaultConfigName] then
+                    for i, v in ipairs(_configRegistry[defaultConfigName]) do
+                        if v == baseName then
+                            table.remove(_configRegistry[defaultConfigName], i)
+                            break
+                        end
+                    end
+                end
+                self:Notify("Config", "Deleted: " .. filePath, 2, "success")
+                return true
+            end
+        end
+        self:Notify("Config", "Could not delete: " .. filePath, 2, "error")
+        return false
+    end
+
+    function Window:ToggleCursorRing(state)
+        if cursorRing then cursorRing.Visible = state end
+    end
+
+    function Window:Destroy()
+        T(main, {Size = UDim2.new(0,620,0,0)}, 0.22, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+        task.wait(0.28)
+        sg:Destroy()
+    end
+
+    -- ── Watermark ─────────────────────────────────────────────────────────────
+    function Window:Watermark(text)
+        if self._watermark then self._watermark:Destroy() end
+        local wm = Frame(sg, {
+            Size = UDim2.new(0,0,0,24),
+            Position = UDim2.new(0,8,0,8),
+            BackgroundColor3 = Theme.BgElement,
+            BackgroundTransparency = 0.1,
+            ZIndex = 90,
+        })
+        Corner(wm, 6)
+        Stroke(wm, Theme.Accent, 1, 0.5)
+        local lbl = Label(wm, {
+            Size = UDim2.new(1,-12,1,0),
+            Position = UDim2.new(0,6,0,0),
+            Text = text,
+            Font = Enum.Font.GothamBold,
+            TextSize = 12,
+            TextColor3 = Theme.TextSecondary,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 91,
+        })
+        task.defer(function()
+            if lbl and lbl.Parent then
+                wm.Size = UDim2.new(0, lbl.TextBounds.X + 16, 0, 24)
+            end
+        end)
+        self._watermark = wm
+        if text:find("{fps}") then
+            local fc2, lt2 = 0, os.clock()
+            -- OPT: Heartbeat sufficient for 1-second FPS display update
+            conn(RunService.Heartbeat:Connect(function()
+                fc2 += 1
+                if os.clock() - lt2 >= 1 then
+                    lbl.Text = text:gsub("{fps}", tostring(fc2))
+                    fc2 = 0; lt2 = os.clock()
+                    wm.Size = UDim2.new(0, lbl.TextBounds.X + 16, 0, 24)
+                end
+            end))
+        end
+    end
+
+    -- ── SaveConfig / LoadConfig ───────────────────────────────────────────────
+    function Window:SaveConfig(customName)
+        local baseName = sanitiseConfigName(customName, defaultConfigName)
+        local filePath = baseName .. ".json"
+
+        local t = {}
+        for _, e in ipairs(self._allElements) do
+            t[e.id] = e.getValue()
+        end
+        local ok, encoded = pcall(function()
+            local parts = {}
+            for k, v in pairs(t) do
+                local val
+                if type(v) == "string"  then val = '"' .. v:gsub('"','\\"') .. '"'
+                elseif type(v) == "boolean" then val = tostring(v)
+                elseif type(v) == "number"  then val = tostring(v)
+                elseif type(v) == "table"   then
+                    local inner = {}
+                    for _, item in ipairs(v) do
+                        table.insert(inner, '"' .. tostring(item) .. '"')
+                    end
+                    val = "[" .. table.concat(inner, ",") .. "]"
+                end
+                if val then
+                    table.insert(parts, '"' .. k .. '":' .. val)
+                end
+            end
+            return "{" .. table.concat(parts, ",") .. "}"
+        end)
+        if ok then
+            safeWrite(filePath, encoded)
+            registerConfig(defaultConfigName, baseName)
+            self:Notify("Config", "Saved as " .. filePath, 2, "success")
+        else
+            self:Notify("Config", "Save failed.", 2, "error")
+        end
+    end
+
+    function Window:LoadConfig(customName)
+        local baseName = sanitiseConfigName(customName, defaultConfigName)
+        local filePath = baseName .. ".json"
+
+        local raw = safeRead(filePath)
+        if not raw then
+            self:Notify("Config", "No config found: " .. filePath, 2, "warning")
+            return
+        end
+        local parsed = {}
+        for k, v in raw:gmatch('"([^"]+)"%s*:%s*([^,}]+)') do
+            if v:sub(1,1) == '"' then
+                parsed[k] = v:match('"(.*)"')
+            elseif v == "true" then
+                parsed[k] = true
+            elseif v == "false" then
+                parsed[k] = false
+            elseif v:sub(1,1) == "[" then
+                local arr = {}
+                for item in v:gmatch('"([^"]+)"') do table.insert(arr, item) end
+                parsed[k] = arr
+            else
+                parsed[k] = tonumber(v) or v
+            end
+        end
+        for _, e in ipairs(self._allElements) do
+            if parsed[e.id] ~= nil then
+                pcall(e.setValue, parsed[e.id])
+            end
+        end
+        self:Notify("Config", "Loaded: " .. filePath, 2, "success")
+    end
+
+    -- ── CreateConfigTab ───────────────────────────────────────────────────────
+    function Window:CreateConfigTab(tabName)
+        tabName = tabName or "Config"
+        local Tab = self:CreateTab(tabName, "C")
+
+        local currentName = defaultConfigName
+
+        Tab:CreateDivider("Config File")
+
+        Tab:CreateInput(
+            "Config name",
+            defaultConfigName,
+            function(text)
+                currentName = sanitiseConfigName(text, defaultConfigName)
+            end
+        )
+
+        local configDropdown = nil
+        local function getConfigList()
+            local list = self:ListSavedConfigs()
+            if #list == 0 then
+                return {"(none saved)"}
+            end
+            return list
+        end
+
+        configDropdown = Tab:CreateDropdown("Saved Configs", getConfigList(), function(selected)
+            if selected ~= "(none saved)" then
+                currentName = selected
+            end
+        end)
+
+        Tab:CreateDivider("Actions")
+
+        Tab:CreateButton("💾  Save Config", function()
+            self:SaveConfig(currentName)
+            task.defer(function()
+                if configDropdown then
+                    configDropdown:RefreshOptions(getConfigList())
+                end
+            end)
+        end, "Save all current settings to a named file")
+
+        Tab:CreateButton("📂  Load Config", function()
+            self:LoadConfig(currentName)
+        end, "Load settings from the selected/named config")
+
+        Tab:CreateButton("🗑️  Delete Config", function()
+            if currentName ~= defaultConfigName then
+                self:DeleteConfig(currentName)
+                task.defer(function()
+                    if configDropdown then
+                        configDropdown:RefreshOptions(getConfigList())
+                    end
+                    currentName = defaultConfigName
+                end)
+            else
+                self:Notify("Config", "Select a config to delete first.", 2, "warning")
+            end
+        end, "Delete the currently selected config file")
+
+        Tab:CreateDivider("Background Image")
+
+        local bgUrl = ""
+        Tab:CreateInput(
+            "Image URL / rbxassetid://...",
+            "",
+            function(text) bgUrl = text end
+        )
+
+        Tab:CreateButton("🖼  Apply Background", function()
+            if bgUrl ~= "" then
+                self:SetBackgroundImage(bgUrl, 0.55)
+                self:Notify("Theme", "Background image applied!", 2, "success")
+            else
+                self:Notify("Theme", "Enter an image URL first.", 2, "warning")
+            end
+        end, "Apply an image as the window background")
+
+        Tab:CreateButton("✖  Clear Background", function()
+            self:ClearBackgroundImage()
+            self:Notify("Theme", "Background cleared.", 2, "info")
+        end, "Remove the background image")
+
+        Tab:CreateDivider("Theme Presets")
+
+        Tab:CreateDropdown("Accent Color", self:GetThemePresets(), function(preset)
+            self:ApplyThemePreset(preset)
+            self:Notify("Theme", "Applied: " .. preset, 2, "success")
+        end)
+
+        return Tab
+    end
+
+    -- ── Notify ────────────────────────────────────────────────────────────────
+    function Window:Notify(title, content, duration, notifType)
+        duration  = duration  or 3
+        notifType = notifType or "info"
+        local barColor = ({
+            info    = Theme.Accent,
+            success = Theme.Success,
+            warning = Theme.Warning,
+            error   = Theme.Danger,
+        })[notifType] or Theme.Accent
+
+        local n = Frame(notifContainer, {
+            Size = UDim2.new(1,0,0,70),
+            BackgroundColor3 = Theme.BgElement,
+            BackgroundTransparency = 1,
+        })
+        Corner(n, 8)
+        Stroke(n, barColor, 1, 0.3)
+
+        local bar = Frame(n, {
+            Size = UDim2.new(0,3,1,-14),
+            Position = UDim2.new(0,7,0,7),
+            BackgroundColor3 = barColor,
+            BackgroundTransparency = 1,
+        })
+        Corner(bar, 3)
+
+        local tag = Label(n, {
+            Size = UDim2.new(0,60,0,14),
+            Position = UDim2.new(0,18,0,6),
+            Text = notifType:upper(),
+            Font = Enum.Font.GothamBold,
+            TextSize = 10,
+            TextColor3 = barColor,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextTransparency = 1,
+        })
+        local ntitle = Label(n, {
+            Size = UDim2.new(1,-25,0,20),
+            Position = UDim2.new(0,18,0,20),
+            Text = title,
+            Font = Enum.Font.GothamBold,
+            TextSize = 13,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextTransparency = 1,
+        })
+        local ncontent = Label(n, {
+            Size = UDim2.new(1,-25,0,22),
+            Position = UDim2.new(0,18,0,38),
+            Text = content,
+            TextSize = 12,
+            TextColor3 = Theme.TextSecondary,
+            TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Top,
+            TextTransparency = 1,
+        })
+        local pbg = Frame(n, {
+            Size = UDim2.new(1,-14,0,3),
+            Position = UDim2.new(0,7,1,-7),
+            BackgroundColor3 = Theme.BgElement2,
+            BackgroundTransparency = 1,
+        })
+        Corner(pbg, 2)
+        local pf = Frame(pbg, {Size = UDim2.new(1,0,1,0), BackgroundColor3 = barColor})
+        Corner(pf, 2)
+
+        T(n,       {BackgroundTransparency = 0.06}, 0.25)
+        T(bar,     {BackgroundTransparency = 0},    0.25)
+        T(tag,     {TextTransparency = 0},          0.25)
+        T(ntitle,  {TextTransparency = 0},          0.25)
+        T(ncontent,{TextTransparency = 0},          0.25)
+        T(pbg,     {BackgroundTransparency = 0.5},  0.25)
+        T(pf,      {Size = UDim2.new(0,0,1,0)},    duration, Enum.EasingStyle.Linear)
+
+        local dc; dc = n.InputBegan:Connect(function(inp)
+            if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+                dc:Disconnect()
+                T(n, {BackgroundTransparency=1, Size=UDim2.new(1,0,0,0)}, 0.2)
+                task.wait(0.25); if n and n.Parent then n:Destroy() end
+            end
+        end)
+        task.delay(duration, function()
+            if not n or not n.Parent then return end
+            for _, obj in ipairs({n,bar,tag,ntitle,ncontent}) do T(obj,{BackgroundTransparency=1},0.3) end
+            T(ntitle,   {TextTransparency=1}, 0.3)
+            T(tag,      {TextTransparency=1}, 0.3)
+            T(ncontent, {TextTransparency=1}, 0.3)
+            task.wait(0.35); if n and n.Parent then n:Destroy() end
+        end)
+    end
+
+    -- ── Title Bar ─────────────────────────────────────────────────────────────
+    local titleBar = Frame(main, {
+        Size = UDim2.new(1,0,0,34),
+        BackgroundColor3 = Color3.fromRGB(13,13,16),
+    })
+
+    local iconOuter = Frame(titleBar, {
+        Size = UDim2.new(0,14,0,14),
+        Position = UDim2.new(0,10,0.5,-7),
+        BackgroundColor3 = Theme.Accent,
+        Rotation = 45,
+    })
+    Corner(iconOuter, 3)
+    local iconInner = Frame(iconOuter, {
+        Size = UDim2.new(0,6,0,6),
+        Position = UDim2.new(0.5,-3,0.5,-3),
+        BackgroundColor3 = Theme.BgMain,
+    })
+    Corner(iconInner, 2)
+
+    local titleLbl = Label(titleBar, {
+        Size = UDim2.new(1,-100,1,0),
+        Position = UDim2.new(0,30,0,0),
+        Text = hubName .. "   |   FPS: 0",
+        Font = Enum.Font.GothamBold,
+        TextSize = 13,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    })
+
+    local sep = Frame(titleBar, {
+        Size = UDim2.new(1,0,0,1),
+        Position = UDim2.new(0,0,1,-1),
+        BackgroundColor3 = Theme.Accent,
+        Visible = false,
+    })
+    regAccent(sep, "BackgroundColor3")
+    -- OPT: single deferred step instead of double task.defer
+    task.defer(function()
+        RunService.Stepped:Wait()
+        if sep and sep.Parent then sep.Visible = true end
+    end)
+    local sepG = Instance.new("UIGradient", sep)
+    sepG.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,    Color3.new(0,0,0)),
+        ColorSequenceKeypoint.new(0.25, Theme.Accent),
+        ColorSequenceKeypoint.new(0.75, Theme.Accent),
+        ColorSequenceKeypoint.new(1,    Color3.new(0,0,0)),
+    })
+
+    -- OPT: FPS counting via Heartbeat; RenderStepped not needed for a 1-second update
+    local fc, lt = 0, os.clock()
+    conn(RunService.Heartbeat:Connect(function()
+        fc += 1
+        if os.clock() - lt >= 1 then
+            titleLbl.Text = hubName .. "   |   FPS: " .. fc
+            fc = 0; lt = os.clock()
+        end
+    end))
+
+    local function TitleBtn(xOff, txt, hCol)
+        local b = Btn(titleBar, {
+            Size = UDim2.new(0,22,0,22),
+            Position = UDim2.new(1,xOff,0.5,-11),
+            BackgroundColor3 = Theme.BgElement,
+            Text = txt, TextSize = 11,
+            Font = Enum.Font.GothamBold,
+            TextColor3 = Theme.TextSecondary,
+        })
+        Corner(b, 5)
+        b.MouseEnter:Connect(function() T(b,{BackgroundColor3=hCol},0.12) end)
+        b.MouseLeave:Connect(function() T(b,{BackgroundColor3=Theme.BgElement},0.12) end)
+        return b
+    end
+
+    local closeBtn = TitleBtn(-28, "X", Theme.Danger)
+    closeBtn.MouseButton1Click:Connect(function() Window:Destroy() end)
+
+    local isMin = false
+    local minBtn = TitleBtn(-54, "-", Color3.fromRGB(55,55,75))
+    local sidebar, contentArea
+
+    minBtn.MouseButton1Click:Connect(function()
+        isMin = not isMin
+        if isMin then
+            T(main, {Size = UDim2.new(0,620,0,34)}, 0.25)
+            task.wait(0.1)
+            if sidebar then sidebar.Visible = false end
+            if contentArea then contentArea.Visible = false end
+        else
+            if sidebar then sidebar.Visible = true end
+            if contentArea then contentArea.Visible = true end
+            T(main, {Size = UDim2.new(0,620,0,FULL_H)}, 0.28)
+        end
+    end)
+
+    -- ── Manual drag on title bar ──────────────────────────────────────────────
+    do
+        local dragging, dragStart, startPos = false, nil, nil
+
+        local function beginDrag(inputPos)
+            if _anySliderDragging then return end
+            dragging  = true
+            dragStart = inputPos
+            startPos  = main.Position
+        end
+        local function moveDrag(inputPos)
+            if not dragging then return end
+            local delta = inputPos - dragStart
+            main.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+        end
+        local function endDrag() dragging = false end
+
+        titleBar.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                beginDrag(Vector2.new(i.Position.X, i.Position.Y))
+            end
+        end)
+        conn(UserInputService.InputChanged:Connect(function(i)
+            if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+                moveDrag(Vector2.new(i.Position.X, i.Position.Y))
+            end
+        end))
+        conn(UserInputService.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then endDrag() end
+        end))
+
+        titleBar.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.Touch then
+                beginDrag(Vector2.new(i.Position.X, i.Position.Y))
+            end
+        end)
+        conn(UserInputService.InputChanged:Connect(function(i)
+            if dragging and i.UserInputType == Enum.UserInputType.Touch then
+                moveDrag(Vector2.new(i.Position.X, i.Position.Y))
+            end
+        end))
+        conn(UserInputService.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.Touch then endDrag() end
+        end))
+    end
+
+    -- ── Sidebar ───────────────────────────────────────────────────────────────
+    sidebar = Frame(main, {
+        Size = UDim2.new(0,158,1,-34),
+        Position = UDim2.new(0,0,0,34),
+        BackgroundColor3 = Theme.BgSidebar,
+    })
+
+    local sideG = Instance.new("UIGradient", sidebar)
+    sideG.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(28,4,38)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(8,8,10)),
+    })
+    sideG.Rotation = 90
+
+    local divLine = Frame(sidebar, {
+        Size = UDim2.new(0,1,1,0),
+        Position = UDim2.new(1,0,0,0),
+        BackgroundColor3 = Theme.Accent,
+        BackgroundTransparency = 0.5,
+    })
+    regAccent(divLine, "BackgroundColor3")
+    local divG = Instance.new("UIGradient", divLine)
+    divG.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   Color3.new(0,0,0)),
+        ColorSequenceKeypoint.new(0.2, Color3.new(1,1,1)),
+        ColorSequenceKeypoint.new(0.8, Color3.new(1,1,1)),
+        ColorSequenceKeypoint.new(1,   Color3.new(0,0,0)),
+    })
+    divG.Rotation = 90
+
+    local tabSearchBox = Box(sidebar, {
+        Size = UDim2.new(1,-10,0,24),
+        Position = UDim2.new(0,5,0,5),
+        PlaceholderText = "Search tabs...",
+        BackgroundColor3 = Theme.BgElement2,
+        TextSize = 11,
+        Font = Enum.Font.Gotham,
+    })
+    Corner(tabSearchBox, 5)
+    local tabSearchStroke = Stroke(tabSearchBox, Theme.Accent, 1, 0.7)
+    regAccent(tabSearchStroke, "Color")
+    local tabSearchPad = Instance.new("UIPadding", tabSearchBox)
+    tabSearchPad.PaddingLeft = UDim.new(0,6)
+
+    local tabListHolder = Frame(sidebar, {
+        Size = UDim2.new(1,0,1,-58),
+        Position = UDim2.new(0,0,0,34),
+        BackgroundTransparency = 1,
+    })
+    local tabLayout = Instance.new("UIListLayout", tabListHolder)
+    tabLayout.Padding    = UDim.new(0,2)
+    tabLayout.SortOrder  = Enum.SortOrder.LayoutOrder
+    local tabPad = Instance.new("UIPadding", tabListHolder)
+    tabPad.PaddingLeft  = UDim.new(0,5)
+    tabPad.PaddingRight = UDim.new(0,5)
+    tabPad.PaddingTop   = UDim.new(0,3)
+
+    Label(sidebar, {
+        Size = UDim2.new(1,0,0,20),
+        Position = UDim2.new(0,0,1,-22),
+        Text = "dcd.gg/messyhub",
+        TextSize = 11,
+        TextColor3 = Color3.fromRGB(75,75,95),
+        TextXAlignment = Enum.TextXAlignment.Center,
+    })
+
+    -- ── Content Area ──────────────────────────────────────────────────────────
+    contentArea = Frame(main, {
+        Size = UDim2.new(1,-158,1,-34),
+        Position = UDim2.new(0,158,0,34),
+        BackgroundColor3 = Theme.BgContent,
+        ClipsDescendants = true,
+    })
+
+    -- ── Floating Controls Bar ─────────────────────────────────────────────────
+    local ctrlBar = Frame(sg, {
+        Size = UDim2.new(0,95,0,26),
+        Position = UDim2.new(1,-105,0,8),
+        BackgroundColor3 = Theme.BgElement,
+        BackgroundTransparency = 0.15,
+        Visible = not useKeySystem,
+    })
+    Corner(ctrlBar, 7)
+    local ctrlStroke = Stroke(ctrlBar, Theme.Accent, 1, 0.45)
+    regAccent(ctrlStroke, "Color")
+    do
+        local cl = Instance.new("UIListLayout", ctrlBar)
+        cl.FillDirection       = Enum.FillDirection.Horizontal
+        cl.VerticalAlignment   = Enum.VerticalAlignment.Center
+        cl.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        cl.Padding             = UDim.new(0,3)
+    end
+    do
+        local cd, cs, cp = false, nil, nil
+        ctrlBar.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1
+            or i.UserInputType == Enum.UserInputType.Touch then
+                cd = true; cs = Vector2.new(i.Position.X, i.Position.Y); cp = ctrlBar.Position
+            end
+        end)
+        conn(UserInputService.InputChanged:Connect(function(i)
+            if cd and (i.UserInputType == Enum.UserInputType.MouseMovement
+                    or i.UserInputType == Enum.UserInputType.Touch) then
+                local d = Vector2.new(i.Position.X, i.Position.Y) - cs
+                ctrlBar.Position = UDim2.new(cp.X.Scale, cp.X.Offset+d.X, cp.Y.Scale, cp.Y.Offset+d.Y)
+            end
+        end))
+        conn(UserInputService.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1
+            or i.UserInputType == Enum.UserInputType.Touch then cd = false end
+        end))
+    end
+
+    local function CtrlBtn(txt)
+        local b = Btn(ctrlBar, {
+            Size = UDim2.new(0,42,0,20),
+            BackgroundColor3 = Theme.BgElement2,
+            Text = txt, TextSize = 11,
+        })
+        Corner(b, 5)
+        b.MouseEnter:Connect(function() T(b,{BackgroundColor3=Theme.AccentDark},0.1) end)
+        b.MouseLeave:Connect(function() T(b,{BackgroundColor3=Theme.BgElement2},0.1) end)
+        return b
+    end
+
+    local showBtn = CtrlBtn("Hide")
+    local lockBtn = CtrlBtn("Lock")
+    local isVis, isLocked = true, false
+
+    showBtn.MouseButton1Click:Connect(function()
+        isVis = not isVis
+        main.Visible = isVis
+        showBtn.Text = isVis and "Hide" or "Show"
+    end)
+    lockBtn.MouseButton1Click:Connect(function()
+        isLocked = not isLocked
+        lockBtn.Text = isLocked and "Unlock" or "Lock"
+    end)
+    Window._isLocked = false
+    lockBtn.MouseButton1Click:Connect(function()
+        Window._isLocked = not Window._isLocked
+    end)
+
+    -- OPT: cache tab button list for search filter to avoid GetChildren() on each keystroke
+    tabSearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+        local q = tabSearchBox.Text:lower()
+        if #Window._tabBtnCache == 0 then
+            for _, child in ipairs(tabListHolder:GetChildren()) do
+                if child:IsA("TextButton") then
+                    table.insert(Window._tabBtnCache, child)
+                end
+            end
+        end
+        for _, btn in ipairs(Window._tabBtnCache) do
+            btn.Visible = q == "" or btn.Name:lower():find(q, 1, true) ~= nil
+        end
+    end)
+
+    -- ── Key System ────────────────────────────────────────────────────────────
+    if useKeySystem then
+        local ok, res = pcall(function() return game:HttpGet(keyUrl) end)
+        local fetchedKey = ok and res:match("^%s*(.-)%s*$") or ""
+        if not ok then warn("[MessyHub] HttpGet failed") end
+
+        local keyOverlay = Frame(sg, {Size=UDim2.new(1,0,1,0), BackgroundColor3=Color3.new(0,0,0), BackgroundTransparency=0.45, ZIndex=50})
+        local keyCard = Frame(sg, {
+            Size = UDim2.new(0,330,0,200),
+            Position = UDim2.new(0.5,-165,0.5,-100),
+            BackgroundColor3 = Theme.BgMain, ZIndex=51,
+        })
+        Corner(keyCard, 12); Stroke(keyCard, Theme.Accent, 1, 0.25)
+
+        local kDiamond = Frame(keyCard, {Size=UDim2.new(0,12,0,12), Position=UDim2.new(0,14,0,16), BackgroundColor3=Theme.Accent, Rotation=45, ZIndex=52})
+        Corner(kDiamond, 2)
+        Label(keyCard, {Size=UDim2.new(1,-40,0,28), Position=UDim2.new(0,32,0,10), Text=hubName.." — Key System", Font=Enum.Font.GothamBold, TextSize=15, TextXAlignment=Enum.TextXAlignment.Left, ZIndex=52})
+        Label(keyCard, {Size=UDim2.new(1,-28,0,18), Position=UDim2.new(0,14,0,42), Text="Enter your access key to continue.", TextSize=12, TextColor3=Theme.TextSecondary, TextXAlignment=Enum.TextXAlignment.Left, ZIndex=52})
+
+        local keyInp = Box(keyCard, {Size=UDim2.new(1,-28,0,34), Position=UDim2.new(0,14,0,68), PlaceholderText="Paste key here...", Font=Enum.Font.Code, ZIndex=52})
+        Corner(keyInp, 7); Stroke(keyInp, Theme.Accent, 1, 0.5)
+
+        local statusLbl = Label(keyCard, {Size=UDim2.new(1,-28,0,18), Position=UDim2.new(0,14,0,110), Text="", TextSize=11, TextColor3=Theme.Danger, TextXAlignment=Enum.TextXAlignment.Left, ZIndex=52})
+
+        local function KBtn(txt, xp)
+            local b = Btn(keyCard, {Size=UDim2.new(0.44,0,0,32), Position=UDim2.new(xp,0,0,154), BackgroundColor3=Theme.AccentDark, Text=txt, TextSize=13, ZIndex=52})
+            Corner(b,7)
+            b.MouseEnter:Connect(function() T(b,{BackgroundColor3=Theme.Accent},0.12) end)
+            b.MouseLeave:Connect(function() T(b,{BackgroundColor3=Theme.AccentDark},0.12) end)
+            return b
+        end
+        local submitBtn = KBtn("Submit", 0.05)
+        local getKeyBtn = KBtn("Get Key", 0.52)
+
+        local function shakeCard()
+            for _, dx in ipairs({-6,6,-4,4,-2,2,0}) do
+                keyCard.Position = UDim2.new(0.5,-165+dx,0.5,-100); task.wait(0.04)
+            end
+        end
+        submitBtn.MouseButton1Click:Connect(function()
+            if keyInp.Text == fetchedKey then
+                keyOverlay:Destroy(); keyCard:Destroy()
+                ctrlBar.Visible = true
+                main.Visible = true
+                task.defer(function()
+                    T(main, {Size = UDim2.new(0,620,0,FULL_H)}, 0.38, Enum.EasingStyle.Back)
+                end)
+                Window:Notify("Access Granted", "Welcome back!", 3, "success")
+            else
+                statusLbl.Text = "Invalid key. Please try again."
+                task.spawn(shakeCard)
+            end
+        end)
+        getKeyBtn.MouseButton1Click:Connect(function()
+            setclipboard(getUrl)
+            Window:Notify("Clipboard", "Key link copied!", 2, "info")
+        end)
+    end
+
+    -- ── CreateTab ─────────────────────────────────────────────────────────────
+    function Window:CreateTab(name, iconLetter)
+        iconLetter = iconLetter or name:sub(1,1):upper()
+
+        local tabBtn = Btn(tabListHolder, {
+            Name = name,
+            Size = UDim2.new(1,0,0,30),
+            BackgroundTransparency = 1,
+            BackgroundColor3 = Theme.BgElement,
+            Text = "",
+        })
+        Corner(tabBtn, 6)
+
+        local iconBox = Frame(tabBtn, {
+            Size = UDim2.new(0,20,0,20),
+            Position = UDim2.new(0,5,0.5,-10),
+            BackgroundColor3 = Theme.BgElement2,
+        })
+        Corner(iconBox, 5)
+        local iconLbl = Label(iconBox, {
+            Size = UDim2.new(1,0,1,0),
+            Text = iconLetter,
+            Font = Enum.Font.GothamBold, TextSize=11,
+            TextColor3 = Theme.TextSecondary,
+        })
+        local tabName = Label(tabBtn, {
+            Size = UDim2.new(1,-36,1,0),
+            Position = UDim2.new(0,30,0,0),
+            Text = name, TextSize=13,
+            TextColor3 = Theme.TextSecondary,
+            TextXAlignment = Enum.TextXAlignment.Left,
+        })
+        local strip = Frame(tabBtn, {
+            Size = UDim2.new(0,3,0.55,0),
+            Position = UDim2.new(0,0,0.225,0),
+            BackgroundColor3 = Theme.Accent,
+            BackgroundTransparency = 1,
+        })
+        Corner(strip, 2)
+        regAccent(strip, "BackgroundColor3")
+
+        tabBtn.MouseEnter:Connect(function()
+            if Window._activeTab ~= tabBtn then
+                T(tabBtn,{BackgroundTransparency=0.82},0.12)
+                tabName.TextColor3 = Theme.TextPrimary
+            end
+        end)
+        tabBtn.MouseLeave:Connect(function()
+            if Window._activeTab ~= tabBtn then
+                T(tabBtn,{BackgroundTransparency=1},0.12)
+                tabName.TextColor3 = Theme.TextSecondary
+            end
+        end)
+
+        local scroll = Instance.new("ScrollingFrame", contentArea)
+        scroll.Size = UDim2.new(1,0,1,0)
+        scroll.BackgroundTransparency = 1
+        scroll.BorderSizePixel = 0
+        scroll.ScrollBarThickness = 4
+        scroll.ScrollBarImageColor3 = Theme.Accent
+        scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        scroll.Visible = false
+        regAccent(scroll, "ScrollBarImageColor3")
+        table.insert(Window._scrollFrames, scroll)  -- OPT: register in window-level cached list
+
+        local sLayout = Instance.new("UIListLayout", scroll)
+        sLayout.Padding   = UDim.new(0,6)
+        sLayout.SortOrder = Enum.SortOrder.LayoutOrder
+        local sPad = Instance.new("UIPadding", scroll)
+        sPad.PaddingTop    = UDim.new(0,8)
+        sPad.PaddingLeft   = UDim.new(0,8)
+        sPad.PaddingRight  = UDim.new(0,8)
+        sPad.PaddingBottom = UDim.new(0,8)
+
+        local function selectTab()
+            if Window._activeTab then
+                T(Window._activeTab,{BackgroundTransparency=1},0.15)
+                if Window._activeStrip   then T(Window._activeStrip,{BackgroundTransparency=1},0.15) end
+                if Window._activeIcon    then Window._activeIcon.TextColor3 = Theme.TextSecondary end
+                if Window._activeIconBox then T(Window._activeIconBox,{BackgroundColor3=Theme.BgElement2},0.15) end
+                if Window._activeTabName then Window._activeTabName.TextColor3 = Theme.TextSecondary end
+            end
+            -- OPT: iterate window-level cached list instead of GetChildren() every switch
+            for _, sf in ipairs(Window._scrollFrames) do sf.Visible = false end
+            scroll.Visible = true
+            T(tabBtn,  {BackgroundColor3=Color3.fromRGB(32,8,48), BackgroundTransparency=0.25}, 0.15)
+            T(strip,   {BackgroundTransparency=0}, 0.15)
+            T(iconBox, {BackgroundColor3=Theme.AccentDark}, 0.15)
+            iconLbl.TextColor3   = Theme.TextAccent
+            tabName.TextColor3   = Theme.TextAccent
+            Window._activeTab      = tabBtn
+            Window._activeStrip    = strip
+            Window._activeIcon     = iconLbl
+            Window._activeIconBox  = iconBox
+            Window._activeTabName  = tabName
+            local cbs = Window._tabOpenCallbacks[name]
+            if cbs then for _, cb in ipairs(cbs) do pcall(cb) end end
+        end
+
+        tabBtn.MouseButton1Click:Connect(selectTab)
+        Window._tabs[name] = selectTab
+        Window._tabBtnCache = {}  -- OPT: invalidate search cache so new tab appears in results
+        if not Window._activeTab then task.defer(selectTab) end
+
+        local order = 0
+        local function nxt() order += 1; return order end
+
+        local function ElemFrame(h)
+            local f = Frame(scroll, {
+                LayoutOrder = nxt(),
+                Size = UDim2.new(1,0,0,h or 34),
+                BackgroundColor3 = Theme.BgElement,
+            })
+            Corner(f, 7)
+            return f
+        end
+
+        -- OPT: Shared drag dispatcher — one InputChanged + one InputEnded connection
+        -- for ALL sliders/step-sliders in this tab instead of N×2 global connections.
+        -- Each slider registers its drag handler; the dispatcher routes events only to
+        -- the active one. This replaces the previous pattern of conn(UIS.InputChanged)
+        -- and conn(UIS.InputEnded) inside every CreateSlider/CreateStepSlider call.
+        local _activeDragFn  = nil  -- currently dragging slider's move handler
+        local _activeEndFn   = nil  -- currently dragging slider's end handler
+        local function registerDrag(beginInput, moveFn, endFn)
+            -- Called with the InputBegan object; sets the active handlers
+            _activeDragFn = moveFn
+            _activeEndFn  = endFn
+            moveFn(beginInput)  -- apply initial position on click
+        end
+        -- One shared InputChanged connection for this window (added once to conn[])
+        if not Window._sharedInputChangedConn then
+            Window._sharedInputChangedConn = true
+            conn(UserInputService.InputChanged:Connect(function(i)
+                if _activeDragFn and (
+                    i.UserInputType == Enum.UserInputType.MouseMovement or
+                    i.UserInputType == Enum.UserInputType.Touch) then
+                    _activeDragFn(i)
+                end
+            end))
+            conn(UserInputService.InputEnded:Connect(function(i)
+                if _activeEndFn and (
+                    i.UserInputType == Enum.UserInputType.MouseButton1 or
+                    i.UserInputType == Enum.UserInputType.Touch) then
+                    _activeEndFn(i)
+                    _activeDragFn = nil
+                    _activeEndFn  = nil
+                end
+            end))
+        end
+
+        local elemCount = 0
+        local function regElem(id, getV, setV)
+            elemCount += 1
+            local uid = name .. "_" .. id .. "_" .. elemCount
+            table.insert(Window._allElements, {id=uid, getValue=getV, setValue=setV})
+        end
+
+        local TabElements = {}
+
+        -- ── Divider ───────────────────────────────────────────────────────────
+        function TabElements:CreateDivider(labelText)
+            local w = Frame(scroll, {
+                LayoutOrder = nxt(),
+                Size = UDim2.new(1,0,0,22),
+                BackgroundTransparency = 1,
+            })
+            Frame(w, {
+                Size = UDim2.new(1,0,0,1),
+                Position = UDim2.new(0,0,0.5,0),
+                BackgroundColor3 = Theme.BgElement2,
+            })
+            if labelText and labelText ~= "" then
+                local pill = Frame(w, {
+                    Size = UDim2.new(0,0,0,16),
+                    Position = UDim2.new(0.5,0,0.5,-8),
+                    BackgroundColor3 = Theme.BgContent,
+                    AnchorPoint = Vector2.new(0.5,0),
+                })
+                Corner(pill, 8)
+                local lbl = Label(pill, {
+                    Size = UDim2.new(1,-8,1,0),
+                    Position = UDim2.new(0,4,0,0),
+                    Text = labelText,
+                    TextSize = 10,
+                    Font = Enum.Font.GothamBold,
+                    TextColor3 = Theme.TextSecondary,
+                })
+                task.defer(function()
+                    if lbl and lbl.Parent then
+                        pill.Size = UDim2.new(0, lbl.TextBounds.X + 16, 0, 16)
+                        pill.Position = UDim2.new(0.5, -(lbl.TextBounds.X/2+8), 0.5, -8)
+                    end
+                end)
+            end
+        end
+
+        -- ── Label ─────────────────────────────────────────────────────────────
+        function TabElements:CreateLabel(text)
+            local f = Frame(scroll, {LayoutOrder=nxt(), Size=UDim2.new(1,0,0,24), BackgroundTransparency=1})
+            Label(f, {Size=UDim2.new(1,0,1,0), Text=text, TextSize=13, TextColor3=Theme.TextSecondary, TextXAlignment=Enum.TextXAlignment.Left, TextWrapped=true})
+        end
+
+        -- ── Badge ─────────────────────────────────────────────────────────────
+        function TabElements:CreateBadge(labelText, badgeText, badgeColor)
+            badgeColor = badgeColor or Theme.Accent
+            local f = ElemFrame(30)
+            Label(f, {Size=UDim2.new(1,-80,1,0), Position=UDim2.new(0,10,0,0), Text=labelText, TextXAlignment=Enum.TextXAlignment.Left})
+            local chip = Frame(f, {Size=UDim2.new(0,64,0,20), Position=UDim2.new(1,-72,0.5,-10), BackgroundColor3=badgeColor})
+            Corner(chip, 10)
+            Label(chip, {Size=UDim2.new(1,0,1,0), Text=badgeText, Font=Enum.Font.GothamBold, TextSize=11, TextColor3=Color3.new(1,1,1)})
+        end
+
+        -- ── Section ───────────────────────────────────────────────────────────
+        function TabElements:CreateSection(sTitle)
+            local wrapper = Frame(scroll, {
+                LayoutOrder      = nxt(),
+                Size             = UDim2.new(1,0,0,32),
+                BackgroundColor3 = Theme.BgElement,
+                ClipsDescendants = true,
+                AutomaticSize    = Enum.AutomaticSize.None,
+            })
+            Corner(wrapper,8); Stroke(wrapper, Theme.Accent, 1, 0.72)
+
+            local hdr = Btn(wrapper, {Size=UDim2.new(1,0,0,32), BackgroundTransparency=1, Text=""})
+            local aBox = Frame(hdr, {Size=UDim2.new(0,18,0,18), Position=UDim2.new(0,8,0.5,-9), BackgroundColor3=Theme.BgElement2})
+            Corner(aBox,4)
+            local aLbl = Label(aBox, {Size=UDim2.new(1,0,1,0), Text="+", Font=Enum.Font.GothamBold, TextSize=13, TextColor3=Theme.TextAccent})
+            Label(hdr, {Size=UDim2.new(1,-40,1,0), Position=UDim2.new(0,32,0,0), Text=sTitle,
+                Font=Enum.Font.GothamBold, TextSize=13, TextColor3=Theme.TextAccent,
+                TextXAlignment=Enum.TextXAlignment.Left})
+
+            local inner = Frame(wrapper, {
+                Size             = UDim2.new(1,0,0,0),
+                Position         = UDim2.new(0,0,0,32),
+                BackgroundTransparency = 1,
+                AutomaticSize    = Enum.AutomaticSize.Y,
+            })
+            local iL = Instance.new("UIListLayout", inner)
+            iL.Padding   = UDim.new(0,5)
+            iL.SortOrder = Enum.SortOrder.LayoutOrder
+            local iP = Instance.new("UIPadding", inner)
+            iP.PaddingLeft   = UDim.new(0,8); iP.PaddingRight  = UDim.new(0,8)
+            iP.PaddingTop    = UDim.new(0,6); iP.PaddingBottom = UDim.new(0,10)
+
+            local exp = false
+            hdr.MouseButton1Click:Connect(function()
+                exp = not exp
+                aLbl.Text = exp and "-" or "+"
+                if exp then
+                    wrapper.AutomaticSize    = Enum.AutomaticSize.Y
+                    wrapper.ClipsDescendants = false
+                else
+                    wrapper.AutomaticSize    = Enum.AutomaticSize.None
+                    wrapper.Size             = UDim2.new(1,0,0,32)
+                    wrapper.ClipsDescendants = true
+                end
+            end)
+
+            local labelOrder = 0
+            local S = {}
+            function S:AddLabel(t)
+                labelOrder += 1
+                Label(inner, {
+                    LayoutOrder     = labelOrder,
+                    Size            = UDim2.new(1,0,0,0),
+                    AutomaticSize   = Enum.AutomaticSize.Y,
+                    Text            = t,
+                    TextSize        = 12,
+                    TextColor3      = Theme.TextSecondary,
+                    TextXAlignment  = Enum.TextXAlignment.Left,
+                    TextYAlignment  = Enum.TextYAlignment.Top,
+                    TextWrapped     = true,
+                })
+            end
+            function S:AddButton(t,cb)
+                labelOrder += 1
+                local b = Btn(inner, {LayoutOrder=labelOrder, Size=UDim2.new(1,0,0,28), BackgroundColor3=Theme.BgElement2, Text=t, TextSize=13})
+                Corner(b,5)
+                b.MouseEnter:Connect(function()  T(b,{BackgroundColor3=Theme.AccentDark},0.1) end)
+                b.MouseLeave:Connect(function()  T(b,{BackgroundColor3=Theme.BgElement2},0.1) end)
+                b.MouseButton1Down:Connect(function() T(b,{BackgroundColor3=Theme.Accent},0.07) end)
+                b.MouseButton1Up:Connect(function()   T(b,{BackgroundColor3=Theme.AccentDark},0.1) end)
+                b.MouseButton1Click:Connect(function() pcall(cb) end)
+            end
+            return S
+        end
+
+        -- ── Button ────────────────────────────────────────────────────────────
+        function TabElements:CreateButton(text, callback, tooltip)
+            local f = ElemFrame(32)
+            local accentStrip = Frame(f, {
+                Size=UDim2.new(0,2,0.5,0),
+                Position=UDim2.new(0,0,0.25,0),
+                BackgroundColor3=Theme.Accent,
+            })
+            regAccent(accentStrip, "BackgroundColor3")
+            local b = Btn(f, {
+                Size=UDim2.new(1,-4,1,0),
+                Position=UDim2.new(0,4,0,0),
+                BackgroundTransparency=1,
+                Text=text,
+                TextXAlignment=Enum.TextXAlignment.Center,
+            })
+            b.MouseEnter:Connect(function() T(f,{BackgroundColor3=Theme.AccentDark},0.12) end)
+            b.MouseLeave:Connect(function() T(f,{BackgroundColor3=Theme.BgElement},0.12) end)
+            b.MouseButton1Down:Connect(function() T(f,{BackgroundColor3=Theme.Accent},0.07) end)
+            b.MouseButton1Up:Connect(function() T(f,{BackgroundColor3=Theme.AccentDark},0.1) end)
+            b.MouseButton1Click:Connect(function() pcall(callback) end)
+            if tooltip then
+                local tip = Frame(sg, {Size=UDim2.new(0,120,0,24), BackgroundColor3=Theme.BgElement2, Visible=false, ZIndex=200})
+                Corner(tip,5)
+                local tLbl = Label(tip,{Size=UDim2.new(1,-10,1,0), Position=UDim2.new(0,5,0,0), Text=tooltip, TextSize=11, TextColor3=Theme.TextSecondary, ZIndex=200})
+                b.MouseEnter:Connect(function()
+                    local mp = UserInputService:GetMouseLocation()
+                    tip.Size = UDim2.new(0, tLbl.TextBounds.X+14, 0, 24)
+                    tip.Position = UDim2.new(0, mp.X+10, 0, mp.Y-32)
+                    tip.Visible = true
+                end)
+                b.MouseLeave:Connect(function() tip.Visible=false end)
+                b.MouseMoved:Connect(function(x,y) tip.Position=UDim2.new(0,x+12,0,y-35) end)
+            end
+        end
+
+        -- ── Confirm Button ────────────────────────────────────────────────────
+        function TabElements:CreateConfirmButton(text, callback)
+            local f = ElemFrame(32)
+            local confirming = false
+            local timer
+            local b = Btn(f, {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text=text})
+            b.MouseEnter:Connect(function() T(f,{BackgroundColor3=Theme.AccentDark},0.12) end)
+            b.MouseLeave:Connect(function()
+                if not confirming then T(f,{BackgroundColor3=Theme.BgElement},0.12) end
+            end)
+            b.MouseButton1Click:Connect(function()
+                if confirming then
+                    confirming = false
+                    if timer then task.cancel(timer) end
+                    b.Text = text
+                    b.TextColor3 = Theme.TextPrimary
+                    T(f, {BackgroundColor3=Theme.BgElement}, 0.15)
+                    pcall(callback)
+                else
+                    confirming = true
+                    b.Text = "Click again to confirm!"
+                    b.TextColor3 = Theme.Warning
+                    T(f, {BackgroundColor3=Color3.fromRGB(60,40,0)}, 0.15)
+                    timer = task.delay(3, function()
+                        confirming = false
+                        b.Text = text
+                        b.TextColor3 = Theme.TextPrimary
+                        T(f, {BackgroundColor3=Theme.BgElement}, 0.15)
+                    end)
+                end
+            end)
+        end
+
+        -- ── Toggle ────────────────────────────────────────────────────────────
+        function TabElements:CreateToggle(text, default, callback)
+            local state = default or false
+            local f = ElemFrame(32)
+            Label(f, {Size=UDim2.new(1,-60,1,0), Position=UDim2.new(0,10,0,0), Text=text, TextXAlignment=Enum.TextXAlignment.Left})
+            local track = Frame(f, {Size=UDim2.new(0,38,0,20), Position=UDim2.new(1,-48,0.5,-10), BackgroundColor3=state and Theme.Accent or Theme.BgElement2})
+            Corner(track, 10)
+            local knob = Frame(track, {Size=UDim2.new(0,15,0,15), Position=state and UDim2.new(1,-17,0.5,-7.5) or UDim2.new(0,2,0.5,-7.5), BackgroundColor3=Color3.new(1,1,1)})
+            Corner(knob, 8)
+            local hit = Btn(f, {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text=""})
+
+            local function setState(s)
+                state = s
+                T(track, {BackgroundColor3=s and Theme.Accent or Theme.BgElement2}, 0.15)
+                T(knob,  {Position=s and UDim2.new(1,-17,0.5,-7.5) or UDim2.new(0,2,0.5,-7.5)}, 0.15)
+                pcall(callback, s)
+            end
+
+            hit.MouseButton1Click:Connect(function() setState(not state) end)
+            hit.InputEnded:Connect(function(i)
+                if i.UserInputType == Enum.UserInputType.Touch then setState(not state) end
+            end)
+            regElem(text, function() return state end, function(v) setState(v==true or v=="true") end)
+
+            local ToggleObj = {}
+            function ToggleObj:SetValue(v) setState(v) end
+            function ToggleObj:SetVisible(v) f.Visible = v end
+            return ToggleObj
+        end
+
+        -- ── Input ─────────────────────────────────────────────────────────────
+        function TabElements:CreateInput(placeholder, defaultText, callback)
+            local f = ElemFrame(32)
+            Stroke(f, Theme.Accent, 1, 0.65)
+            local arrowLbl = Label(f, {
+                Size=UDim2.new(0,28,1,0),
+                Text=">>",
+                Font=Enum.Font.GothamBold,
+                TextSize=11,
+                TextColor3=Theme.Accent,
+                ZIndex=2,
+            })
+            local inp = Box(f, {
+                Size=UDim2.new(1,-34,1,0), Position=UDim2.new(0,28,0,0),
+                PlaceholderText=placeholder, Text=defaultText or "",
+                BackgroundColor3=Color3.new(0,0,0), BackgroundTransparency=1,
+                Font=Enum.Font.Code,
+                ZIndex=2,
+            })
+            inp.Focused:Connect(function()
+                local s=f:FindFirstChildOfClass("UIStroke"); if s then s.Transparency=0 end
+            end)
+            inp:GetPropertyChangedSignal("Text"):Connect(function()
+                pcall(callback, inp.Text)
+            end)
+            inp.FocusLost:Connect(function()
+                local s=f:FindFirstChildOfClass("UIStroke"); if s then s.Transparency=0.65 end
+                pcall(callback, inp.Text)
+            end)
+            regElem(placeholder, function() return inp.Text end, function(v) inp.Text=tostring(v) end)
+
+            local InputObj = {}
+            function InputObj:SetValue(v) inp.Text=tostring(v) end
+            function InputObj:SetVisible(v) f.Visible=v end
+            return InputObj
+        end
+
+        -- ── Slider ────────────────────────────────────────────────────────────
+        function TabElements:CreateSlider(labelText, minVal, maxVal, defVal, callback)
+            local f = ElemFrame(50); f.Size = UDim2.new(1,0,0,50)
+            local valLbl = Label(f, {Size=UDim2.new(1,-55,0,22), Position=UDim2.new(0,10,0,4), Text=labelText..":  "..defVal, TextXAlignment=Enum.TextXAlignment.Left})
+            local numBox = Box(f, {Size=UDim2.new(0,42,0,20), Position=UDim2.new(1,-50,0,5), Font=Enum.Font.Code, TextSize=12, Text=tostring(defVal), TextXAlignment=Enum.TextXAlignment.Center})
+            Corner(numBox, 5)
+            local track = Frame(f, {Size=UDim2.new(1,-20,0,8), Position=UDim2.new(0,10,0,34), BackgroundColor3=Theme.BgElement2})
+            Corner(track, 4)
+            local fill = Frame(track, {Size=UDim2.new((defVal-minVal)/(maxVal-minVal),0,1,0), BackgroundColor3=Theme.Accent})
+            Corner(fill,4)
+            local fg=Instance.new("UIGradient",fill); fg.Color=ColorSequence.new(Color3.fromRGB(110,0,180),Theme.Accent)
+            local knob = Frame(track, {Size=UDim2.new(0,16,0,16), BackgroundColor3=Color3.new(1,1,1)})
+            knob.AnchorPoint=Vector2.new(0.5,0)
+            knob.Position=UDim2.new((defVal-minVal)/(maxVal-minVal),0,0.5,-8)
+            Corner(knob,8); Stroke(knob,Theme.Accent,2,0)
+
+            local throttledCb = throttle(callback, 0.05)
+
+            local function apply(val)
+                val = math.clamp(math.floor(val+0.5), minVal, maxVal)
+                local r = (val-minVal)/(maxVal-minVal)
+                fill.Size = UDim2.new(r,0,1,0)
+                knob.Position = UDim2.new(r,0,0.5,-8)
+                numBox.Text = tostring(val)
+                valLbl.Text = labelText..":  "..val
+                throttledCb(val)
+            end
+
+            local function posFromInput(i)
+                return math.clamp(
+                    (i.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+            end
+
+            numBox.FocusLost:Connect(function() apply(tonumber(numBox.Text) or defVal) end)
+            local drag = false
+
+            -- OPT: uses shared drag dispatcher (one InputChanged + one InputEnded for whole window)
+            track.InputBegan:Connect(function(i)
+                if i.UserInputType == Enum.UserInputType.MouseButton1
+                or i.UserInputType == Enum.UserInputType.Touch then
+                    drag = true
+                    _anySliderDragging = true
+                    registerDrag(i,
+                        function(mi) apply(minVal + (maxVal-minVal) * posFromInput(mi)) end,
+                        function(_)  drag = false; _anySliderDragging = false end
+                    )
+                end
+            end)
+            regElem(labelText, function() return tonumber(numBox.Text) end, function(v) apply(tonumber(v) or defVal) end)
+
+            local SliderObj = {}
+            function SliderObj:SetValue(v) apply(v) end
+            function SliderObj:SetVisible(v) f.Visible=v end
+            return SliderObj
+        end
+
+        -- ── Step Slider ───────────────────────────────────────────────────────
+        function TabElements:CreateStepSlider(labelText, steps, defIdx, callback)
+            defIdx = math.clamp(defIdx or 1, 1, #steps)
+            local f = ElemFrame(50); f.Size=UDim2.new(1,0,0,50)
+            local valLbl = Label(f,{Size=UDim2.new(1,-10,0,22),Position=UDim2.new(0,10,0,4),Text=labelText.." :  "..tostring(steps[defIdx]),TextXAlignment=Enum.TextXAlignment.Left})
+            local track = Frame(f,{Size=UDim2.new(1,-20,0,8),Position=UDim2.new(0,10,0,34),BackgroundColor3=Theme.BgElement2})
+            Corner(track,4)
+            local fill = Frame(track,{Size=UDim2.new((defIdx-1)/(#steps-1),0,1,0),BackgroundColor3=Theme.Accent})
+            Corner(fill,4)
+            local knob = Frame(track,{Size=UDim2.new(0,16,0,16),BackgroundColor3=Color3.new(1,1,1)})
+            knob.AnchorPoint=Vector2.new(0.5,0)
+            local curIdx = defIdx
+            local function setStep(idx)
+                idx = math.clamp(idx,1,#steps); curIdx = idx
+                local r = #steps>1 and (idx-1)/(#steps-1) or 0
+                fill.Size = UDim2.new(r,0,1,0); knob.Position = UDim2.new(r,0,0.5,-8)
+                valLbl.Text = labelText.." :  "..tostring(steps[idx])
+                pcall(callback, steps[idx], idx)
+            end
+            setStep(defIdx)
+            Corner(knob,8); Stroke(knob,Theme.Accent,2,0)
+
+            local function rFromInput(i)
+                return math.clamp((i.Position.X-track.AbsolutePosition.X)/track.AbsoluteSize.X,0,1)
+            end
+
+            local drag=false
+            -- OPT: shared drag dispatcher
+            track.InputBegan:Connect(function(i)
+                if i.UserInputType==Enum.UserInputType.MouseButton1
+                or i.UserInputType==Enum.UserInputType.Touch then
+                    drag=true; _anySliderDragging=true
+                    registerDrag(i,
+                        function(mi) setStep(math.floor(rFromInput(mi)*(#steps-1)+0.5)+1) end,
+                        function(_)  drag=false; _anySliderDragging=false end
+                    )
+                end
+            end)
+
+            local StepObj={}
+            function StepObj:SetValue(idx) setStep(idx) end
+            function StepObj:SetVisible(v) f.Visible=v end
+            return StepObj
+        end
+
+        -- ── Dropdown ──────────────────────────────────────────────────────────
+        -- FIX: arrow font changed from GothamBold to Gotham so ▾/▴ glyphs render correctly
+        function TabElements:CreateDropdown(labelText, options, callback)
+            local selected = nil
+            local oBtns   = {}
+            local isOpen  = false
+
+            local btn = Btn(scroll, {
+                LayoutOrder = nxt(),
+                Size = UDim2.new(1,0,0,32),
+                BackgroundColor3 = Theme.BgElement,
+                Text = "",
+            })
+            Corner(btn, 7)
+            Stroke(btn, Theme.Accent, 1, 0.65)
+
+            local btnLabel = Label(btn, {
+                Size = UDim2.new(1,-36,1,0),
+                Position = UDim2.new(0,10,0,0),
+                Text = labelText,
+                TextSize = 13,
+                TextColor3 = Theme.TextSecondary,
+                TextXAlignment = Enum.TextXAlignment.Left,
+            })
+
+            -- PATCHED: Font = Enum.Font.Gotham (was GothamBold — didn't render ▾/▴)
+            local arrow = Label(btn, {
+                Size = UDim2.new(0,20,1,0),
+                Position = UDim2.new(1,-24,0,0),
+                Text = "v",
+                Font = Enum.Font.GothamBold,
+                TextSize = 12,
+                TextColor3 = Theme.Accent,
+                TextXAlignment = Enum.TextXAlignment.Center,
+            })
+
+            local drop = Frame(scroll, {
+                LayoutOrder = nxt(),
+                Size = UDim2.new(1,0,0,0),
+                BackgroundColor3 = Theme.BgElement2,
+                ClipsDescendants = true,
+                Visible = false,
+            })
+            Corner(drop, 7)
+            Stroke(drop, Theme.Accent, 1, 0.75)
+
+            local sb = Box(drop, {
+                Size = UDim2.new(1,-10,0,26),
+                Position = UDim2.new(0,5,0,4),
+                PlaceholderText = "Search...",
+                BackgroundColor3 = Theme.BgElement,
+                TextSize = 12,
+                Font = Enum.Font.Gotham,
+            })
+            Corner(sb, 5)
+            local sbPad = Instance.new("UIPadding", sb)
+            sbPad.PaddingLeft = UDim.new(0,6)
+
+            local os2 = Instance.new("ScrollingFrame", drop)
+            os2.Size = UDim2.new(1,0,1,-36)
+            os2.Position = UDim2.new(0,0,0,34)
+            os2.BackgroundTransparency = 1
+            os2.ScrollBarThickness = 3
+            os2.ScrollBarImageColor3 = Theme.Accent
+            os2.CanvasSize = UDim2.new(0,0,0,0)
+            local dL = Instance.new("UIListLayout", os2)
+            dL.Padding = UDim.new(0,2)
+            dL.HorizontalAlignment = Enum.HorizontalAlignment.Center
+            local dP = Instance.new("UIPadding", os2)
+            dP.PaddingLeft = UDim.new(0,5)
+            dP.PaddingRight = UDim.new(0,5)
+            dP.PaddingTop = UDim.new(0,3)
+
+            local function buildOptionBtn(opt)
+                local ob = Btn(os2, {
+                    Size = UDim2.new(1,0,0,26),
+                    BackgroundColor3 = Theme.BgElement,
+                    Text = opt,
+                    TextSize = 13,
+                    TextColor3 = Theme.TextSecondary,
+                    TextXAlignment = Enum.TextXAlignment.Center,
+                })
+                Corner(ob, 5)
+                ob.MouseEnter:Connect(function() T(ob,{BackgroundColor3=Theme.AccentDark, TextColor3=Theme.TextPrimary},0.1) end)
+                ob.MouseLeave:Connect(function()
+                    T(ob,{BackgroundColor3=selected==opt and Theme.AccentDark or Theme.BgElement, TextColor3=selected==opt and Theme.TextPrimary or Theme.TextSecondary},0.1)
+                end)
+                ob.MouseButton1Click:Connect(function()
+                    selected = opt
+                    btnLabel.Text = opt
+                    btnLabel.TextColor3 = Theme.TextPrimary
+                    isOpen = false
+                    arrow.Text = "v"
+                    T(drop,{Size=UDim2.new(1,0,0,0)},0.18)
+                    task.wait(0.2); drop.Visible = false
+                    for _, b2 in ipairs(oBtns) do
+                        b2.BackgroundColor3 = b2.Text == opt and Theme.AccentDark or Theme.BgElement
+                        b2.TextColor3 = b2.Text == opt and Theme.TextPrimary or Theme.TextSecondary
+                    end
+                    pcall(callback, opt)
+                end)
+                return ob
+            end
+
+            local function populateOptions(opts)
+                for _, ob in ipairs(oBtns) do ob:Destroy() end
+                oBtns = {}
+                for _, opt in ipairs(opts) do
+                    table.insert(oBtns, buildOptionBtn(opt))
+                end
+                os2.CanvasSize = UDim2.new(0,0,0,#oBtns*28)
+            end
+
+            populateOptions(options)
+
+            -- OPT: debounce search — skip redundant filter if query hasn't changed
+            local _lastSbQuery = ""
+            sb:GetPropertyChangedSignal("Text"):Connect(function()
+                local q = sb.Text:lower()
+                if q == _lastSbQuery then return end
+                _lastSbQuery = q
+                local vis = 0
+                for _, ob in ipairs(oBtns) do
+                    ob.Visible = q == "" or ob.Text:lower():find(q, 1, true) ~= nil
+                    if ob.Visible then vis += 1 end
+                end
+                os2.CanvasSize = UDim2.new(0,0,0,vis*28)
+            end)
+
+            btn.MouseButton1Click:Connect(function()
+                isOpen = not isOpen
+                arrow.Text = isOpen and "^" or "v"
+                if isOpen then
+                    sb.Text = ""
+                    for _, ob in ipairs(oBtns) do ob.Visible = true end
+                    os2.CanvasSize = UDim2.new(0,0,0,#oBtns*28)
+                    drop.Visible = true
+                    T(drop,{Size=UDim2.new(1,0,0,math.min(#oBtns*28+40,165))},0.18)
+                else
+                    T(drop,{Size=UDim2.new(1,0,0,0)},0.18)
+                    task.wait(0.2); if not isOpen then drop.Visible=false end
+                end
+            end)
+
+            btn.MouseEnter:Connect(function() T(btn,{BackgroundColor3=Color3.fromRGB(32,32,38)},0.1) end)
+            btn.MouseLeave:Connect(function() T(btn,{BackgroundColor3=Theme.BgElement},0.1) end)
+
+            regElem(labelText, function() return selected end, function(v)
+                for _, ob in ipairs(oBtns) do
+                    if ob.Text == v then ob.MouseButton1Click:Fire() end
+                end
+            end)
+
+            local DdObj = {}
+            function DdObj:RefreshOptions(newOpts)
+                local wasOpen = isOpen
+                if wasOpen then
+                    isOpen = false; arrow.Text = "v"
+                    drop.Size = UDim2.new(1,0,0,0); drop.Visible = false
+                end
+                selected = nil
+                btnLabel.Text = labelText
+                btnLabel.TextColor3 = Theme.TextSecondary
+                populateOptions(newOpts)
+            end
+            function DdObj:SetValue(v)
+                for _, ob in ipairs(oBtns) do
+                    if ob.Text == v then ob.MouseButton1Click:Fire() end
+                end
+            end
+            function DdObj:SetVisible(v)
+                btn.Visible = v
+                if not v then drop.Visible = false end
+            end
+            return DdObj
+        end
+
+        -- ── Multi-Dropdown ────────────────────────────────────────────────────
+        -- PATCHED: arrow uses plain ASCII "v" for same reason as CreateDropdown
+        function TabElements:CreateMultiDropdown(labelText, options, callback)
+            local selected = {}
+            local rowRefs  = {}
+
+            local function getCount()
+                local n = 0
+                for _ in pairs(selected) do n += 1 end
+                return n
+            end
+
+            local function getList()
+                local t = {}
+                for k in pairs(selected) do table.insert(t, k) end
+                return t
+            end
+
+            local btn = Btn(scroll, {
+                LayoutOrder = nxt(),
+                Size = UDim2.new(1,0,0,32),
+                BackgroundColor3 = Theme.BgElement,
+                Text = "",
+            })
+            Corner(btn, 7); Stroke(btn, Theme.Accent, 1, 0.65)
+
+            local btnLabel = Label(btn, {
+                Size = UDim2.new(1,-60,1,0),
+                Position = UDim2.new(0,10,0,0),
+                Text = labelText,
+                TextSize = 13,
+                TextColor3 = Theme.TextSecondary,
+                TextXAlignment = Enum.TextXAlignment.Left,
+            })
+
+            local badge = Frame(btn, {
+                Size = UDim2.new(0,22,0,22),
+                Position = UDim2.new(1,-50,0.5,-11),
+                BackgroundColor3 = Theme.AccentDark,
+            })
+            Corner(badge, 11)
+            local bCount = Label(badge, {
+                Size = UDim2.new(1,0,1,0),
+                Text = "0",
+                Font = Enum.Font.GothamBold,
+                TextSize = 11,
+                TextColor3 = Color3.new(1,1,1),
+            })
+
+            -- PATCHED: "v" instead of "▾" so it always renders
+            Label(btn, {
+                Size = UDim2.new(0,20,1,0),
+                Position = UDim2.new(1,-24,0,0),
+                Text = "v",
+                Font = Enum.Font.GothamBold,
+                TextSize = 12,
+                TextColor3 = Theme.Accent,
+                TextXAlignment = Enum.TextXAlignment.Center,
+            })
+
+            local drop = Frame(scroll, {
+                LayoutOrder = nxt(),
+                Size = UDim2.new(1,0,0,0),
+                BackgroundColor3 = Theme.BgElement2,
+                ClipsDescendants = true,
+                Visible = false,
+            })
+            Corner(drop, 7)
+
+            local os3 = Instance.new("ScrollingFrame", drop)
+            os3.Size = UDim2.new(1,0,1,0)
+            os3.BackgroundTransparency = 1
+            os3.ScrollBarThickness = 3
+            os3.ScrollBarImageColor3 = Theme.Accent
+            os3.CanvasSize = UDim2.new(0,0,0,0)
+            local dL2 = Instance.new("UIListLayout", os3)
+            dL2.Padding = UDim.new(0,2)
+            dL2.HorizontalAlignment = Enum.HorizontalAlignment.Center
+            local dP2 = Instance.new("UIPadding", os3)
+            dP2.PaddingLeft = UDim.new(0,5); dP2.PaddingRight = UDim.new(0,5)
+            dP2.PaddingTop  = UDim.new(0,4); dP2.PaddingBottom = UDim.new(0,4)
+
+            local isOpen = false
+
+            for _, opt in ipairs(options) do
+                local isSelected = false
+
+                local row = Btn(os3, {
+                    Size = UDim2.new(1,0,0,30),
+                    BackgroundColor3 = Theme.BgElement,
+                    Text = "",
+                })
+                Corner(row, 6)
+
+                local chk = Frame(row, {
+                    Size = UDim2.new(0,16,0,16),
+                    Position = UDim2.new(0,8,0.5,-8),
+                    BackgroundColor3 = Theme.BgElement2,
+                })
+                Corner(chk, 4)
+                Stroke(chk, Theme.Accent, 1, 0.6)
+
+                local chkMark = Label(chk, {
+                    Size = UDim2.new(1,0,1,0),
+                    Text = "",
+                    Font = Enum.Font.GothamBold,
+                    TextSize = 13,
+                    TextColor3 = Color3.new(1,1,1),
+                })
+
+                Label(row, {
+                    Size = UDim2.new(1,-40,1,0),
+                    Position = UDim2.new(0,32,0,0),
+                    Text = opt,
+                    TextSize = 13,
+                    TextColor3 = Theme.TextSecondary,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                })
+
+                rowRefs[opt] = {row=row, chk=chk, chkMark=chkMark}
+
+                local function applyRowState(on)
+                    isSelected = on
+                    if on then selected[opt] = true else selected[opt] = nil end
+                    chkMark.Text = on and "+" or ""
+                    T(chk,  {BackgroundColor3 = on and Theme.Accent or Theme.BgElement2}, 0.12)
+                    T(row,  {BackgroundColor3 = on and Color3.fromRGB(38,10,58) or Theme.BgElement}, 0.12)
+                    local c = getCount()
+                    bCount.Text = tostring(c)
+                    T(badge, {BackgroundColor3 = c > 0 and Theme.Accent or Theme.AccentDark}, 0.12)
+                end
+
+                row.MouseEnter:Connect(function()
+                    if not isSelected then T(row, {BackgroundColor3 = Theme.AccentDark}, 0.1) end
+                end)
+                row.MouseLeave:Connect(function()
+                    T(row, {BackgroundColor3 = isSelected and Color3.fromRGB(38,10,58) or Theme.BgElement}, 0.1)
+                end)
+
+                row.MouseButton1Click:Connect(function()
+                    applyRowState(not isSelected)
+                    pcall(callback, getList())
+                end)
+            end
+
+            os3.CanvasSize = UDim2.new(0,0,0, #options * 34)
+
+            btn.MouseButton1Click:Connect(function()
+                isOpen = not isOpen
+                if isOpen then
+                    drop.Visible = true
+                    T(drop, {Size = UDim2.new(1,0,0, math.min(#options*34+8, 180))}, 0.18)
+                else
+                    T(drop, {Size = UDim2.new(1,0,0,0)}, 0.18)
+                    task.wait(0.2)
+                    if not isOpen then drop.Visible = false end
+                end
+            end)
+
+            btn.MouseEnter:Connect(function() T(btn,{BackgroundColor3=Color3.fromRGB(32,32,38)},0.1) end)
+            btn.MouseLeave:Connect(function() T(btn,{BackgroundColor3=Theme.BgElement},0.1) end)
+
+            local MDObj = {}
+            function MDObj:SetValue(arr)
+                for opt2, ref in pairs(rowRefs) do
+                    selected[opt2] = nil
+                    ref.chkMark.Text = ""
+                    ref.chk.BackgroundColor3 = Theme.BgElement2
+                    ref.row.BackgroundColor3 = Theme.BgElement
+                end
+                if type(arr) == "table" then
+                    for _, v in ipairs(arr) do
+                        if rowRefs[v] then
+                            selected[v] = true
+                            rowRefs[v].chkMark.Text = "+"
+                            rowRefs[v].chk.BackgroundColor3 = Theme.Accent
+                            rowRefs[v].row.BackgroundColor3 = Color3.fromRGB(38,10,58)
+                        end
+                    end
+                end
+                local c = getCount()
+                bCount.Text = tostring(c)
+                badge.BackgroundColor3 = c > 0 and Theme.Accent or Theme.AccentDark
+                pcall(callback, getList())
+            end
+            function MDObj:GetSelected() return getList() end
+            function MDObj:SetVisible(v) btn.Visible=v; if not v then drop.Visible=false end end
+            return MDObj
+        end
+
+        -- ── Radio Group ───────────────────────────────────────────────────────
+        function TabElements:CreateRadioGroup(labelText, options, defIdx, callback)
+            defIdx = defIdx or 1
+            local f = ElemFrame(32 + #options * 28)
+            f.Size = UDim2.new(1,0,0,10 + #options*28)
+            Label(f,{Size=UDim2.new(1,0,0,22),Position=UDim2.new(0,10,0,0),Text=labelText,Font=Enum.Font.GothamBold,TextSize=12,TextColor3=Theme.TextSecondary,TextXAlignment=Enum.TextXAlignment.Left})
+            local radios={}; local currentIdx=defIdx
+            for i, opt in ipairs(options) do
+                local row=Btn(f,{Size=UDim2.new(1,-10,0,24),Position=UDim2.new(0,8,0,18+(i-1)*26),BackgroundTransparency=1,Text=""})
+                local ring=Frame(row,{Size=UDim2.new(0,16,0,16),Position=UDim2.new(0,0,0.5,-8),BackgroundColor3=Theme.BgElement2}); Corner(ring,8)
+                local dot=Frame(ring,{Size=UDim2.new(0,8,0,8),Position=UDim2.new(0.5,-4,0.5,-4),BackgroundColor3=Theme.Accent,BackgroundTransparency=i==defIdx and 0 or 1}); Corner(dot,4)
+                Label(row,{Size=UDim2.new(1,-26,1,0),Position=UDim2.new(0,22,0,0),Text=opt,TextSize=13,TextColor3=i==defIdx and Theme.TextPrimary or Theme.TextSecondary,TextXAlignment=Enum.TextXAlignment.Left})
+                table.insert(radios,{ring=ring,dot=dot,label=row:FindFirstChildOfClass("TextLabel")})
+                row.MouseButton1Click:Connect(function()
+                    for j,r in ipairs(radios) do
+                        T(r.dot,{BackgroundTransparency=j==i and 0 or 1},0.15)
+                        T(r.ring,{BackgroundColor3=j==i and Theme.AccentDark or Theme.BgElement2},0.15)
+                        r.label.TextColor3 = j==i and Theme.TextPrimary or Theme.TextSecondary
+                    end
+                    currentIdx=i; pcall(callback, opt, i)
+                end)
+            end
+        end
+
+        -- ── Keybind ───────────────────────────────────────────────────────────
+        function TabElements:CreateKeybind(labelText, defaultKey, callback)
+            local curKey=defaultKey or Enum.KeyCode.Unknown; local binding=false
+            local f=ElemFrame(32)
+            Label(f,{Size=UDim2.new(1,-100,1,0),Position=UDim2.new(0,10,0,0),Text=labelText,TextXAlignment=Enum.TextXAlignment.Left})
+            local kb=Btn(f,{Size=UDim2.new(0,80,0,22),Position=UDim2.new(1,-88,0.5,-11),BackgroundColor3=Theme.BgElement2,Text=curKey.Name,TextSize=12,Font=Enum.Font.Code,TextColor3=Theme.TextAccent})
+            Corner(kb,5); Stroke(kb,Theme.Accent,1,0.45)
+            kb.MouseButton1Click:Connect(function()
+                if binding then return end; binding=true; kb.Text="..."; kb.TextColor3=Theme.Warning
+                local c; c=UserInputService.InputBegan:Connect(function(inp,proc)
+                    if proc or inp.UserInputType~=Enum.UserInputType.Keyboard then return end
+                    curKey=inp.KeyCode; kb.Text=inp.KeyCode.Name; kb.TextColor3=Theme.TextAccent; binding=false; c:Disconnect()
+                end); conn(c)
+            end)
+            conn(UserInputService.InputBegan:Connect(function(inp,proc)
+                if not proc and inp.KeyCode==curKey then pcall(callback,curKey) end
+            end))
+        end
+
+        -- ── Color Picker ──────────────────────────────────────────────────────
+        function TabElements:CreateColorPicker(labelText, defColor, callback)
+            defColor = defColor or Theme.Accent
+            local h, s, v = Color3.toHSV(defColor)
+            local H_HEADER  = 32
+            local H_WHEEL   = 198
+            local H_RGB     = 142
+            local activeTab = "wheel"
+            local exp       = false
+
+            local f = ElemFrame(H_HEADER)
+            f.ClipsDescendants = true
+
+            local hdr = Btn(f, {Size=UDim2.new(1,0,0,H_HEADER), BackgroundTransparency=1, Text=""})
+            local hPad = Instance.new("UIPadding", hdr); hPad.PaddingLeft = UDim.new(0,10)
+            Label(hdr, {Size=UDim2.new(1,-40,1,0), Text="Color: "..labelText, TextXAlignment=Enum.TextXAlignment.Left})
+            local prev = Frame(hdr, {Size=UDim2.new(0,18,0,18), Position=UDim2.new(1,-28,0.5,-9), BackgroundColor3=defColor})
+            Corner(prev, 4)
+
+            local function expandedH()
+                return activeTab == "wheel" and H_WHEEL or H_RGB
+            end
+            hdr.MouseButton1Click:Connect(function()
+                exp = not exp
+                T(f, {Size=UDim2.new(1,0,0, exp and expandedH() or H_HEADER)}, 0.22)
+            end)
+
+            local tabBar = Frame(f, {
+                Size=UDim2.new(1,-16,0,24),
+                Position=UDim2.new(0,8,0,H_HEADER+4),
+                BackgroundColor3=Theme.BgElement2,
+            })
+            Corner(tabBar, 6)
+
+            local function makeTabBtn(txt, xScale)
+                local b = Btn(tabBar, {
+                    Size=UDim2.new(0.5,0,1,0),
+                    Position=UDim2.new(xScale,0,0,0),
+                    BackgroundTransparency=1,
+                    Text=txt, TextSize=11,
+                    Font=Enum.Font.GothamBold,
+                    TextColor3=Theme.TextSecondary,
+                })
+                Corner(b, 5)
+                return b
+            end
+
+            local wheelTabBtn = makeTabBtn("Wheel", 0)
+            local rgbTabBtn   = makeTabBtn("RGB",   0.5)
+
+            local tabPill = Frame(tabBar, {
+                Size=UDim2.new(0.5,-4,1,-4),
+                Position=UDim2.new(0,2,0,2),
+                BackgroundColor3=Theme.AccentDark,
+            })
+            Corner(tabPill, 5)
+
+            local PANEL_Y = H_HEADER + 32
+            local wheelPanel = Frame(f, {Size=UDim2.new(1,-16,0,158), Position=UDim2.new(0,8,0,PANEL_Y), BackgroundTransparency=1})
+            local rgbPanel   = Frame(f, {Size=UDim2.new(1,-16,0,102), Position=UDim2.new(0,8,0,PANEL_Y), BackgroundTransparency=1, Visible=false})
+
+            -- OPT: reuses _cachedColor (already computed by recomputeColor) — no extra fromHSV call
+            local function hsvToRGB()
+                return math.floor(_cachedColor.R*255+0.5),
+                       math.floor(_cachedColor.G*255+0.5),
+                       math.floor(_cachedColor.B*255+0.5)
+            end
+
+            local syncWheelFromHSV
+            local syncRGBFromHSV
+
+            -- OPT: cache the computed Color3 so fireCallback, syncRGB and toHex all
+            -- reuse the same value from a single Color3.fromHSV call per update cycle
+            local _cachedColor = Color3.fromHSV(h, s, v)
+            local function recomputeColor()
+                _cachedColor = Color3.fromHSV(h, s, v)
+            end
+
+            local function fireCallback()
+                recomputeColor()
+                prev.BackgroundColor3 = _cachedColor
+                pcall(callback, _cachedColor)
+            end
+
+            local WHEEL_SIZE = 128
+            local WHEEL_MID  = WHEEL_SIZE / 2
+
+            local wheelClip = Frame(wheelPanel, {Size=UDim2.new(0,WHEEL_SIZE,0,WHEEL_SIZE), Position=UDim2.new(0,0,0,0), BackgroundTransparency=1, ClipsDescendants=true})
+            Corner(wheelClip, WHEEL_MID)
+
+            local HUE_COLORS = {
+                Color3.fromRGB(255,0,0), Color3.fromRGB(255,255,0), Color3.fromRGB(0,255,0),
+                Color3.fromRGB(0,255,255), Color3.fromRGB(0,0,255), Color3.fromRGB(255,0,255), Color3.fromRGB(255,0,0),
+            }
+
+            local sliceCount = 64
+            for i = 1, sliceCount do
+                local t0 = (i-1)/sliceCount
+                local t1 = i/sliceCount
+                local function hueAt(t)
+                    local seg = t * 6
+                    local idx = math.floor(seg)
+                    local frac = seg - idx
+                    local c0 = HUE_COLORS[idx+1] or HUE_COLORS[1]
+                    local c1 = HUE_COLORS[idx+2] or HUE_COLORS[1]
+                    return Color3.new(c0.R+(c1.R-c0.R)*frac, c0.G+(c1.G-c0.G)*frac, c0.B+(c1.B-c0.B)*frac)
+                end
+                local sl = Frame(wheelClip, {Size=UDim2.new(0,math.ceil(WHEEL_SIZE/sliceCount)+1,1,0), Position=UDim2.new(t0,0,0,0), BorderSizePixel=0, BackgroundColor3=hueAt(t0)})
+                local g = Instance.new("UIGradient", sl)
+                g.Color = ColorSequence.new(hueAt(t0), hueAt(t1)); g.Rotation = 0
+            end
+
+            local satOverlay = Frame(wheelClip, {Size=UDim2.new(1,0,1,0), BackgroundColor3=Color3.new(1,1,1)})
+            local satG = Instance.new("UIGradient", satOverlay)
+            satG.Color = ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.new(1,1,1)), ColorSequenceKeypoint.new(1,Color3.new(1,1,1))})
+            satG.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0,0), NumberSequenceKeypoint.new(0.5,0.65), NumberSequenceKeypoint.new(1,1)})
+
+            local valOverlay = Frame(wheelClip, {Size=UDim2.new(1,0,1,0), BackgroundColor3=Color3.new(0,0,0), BackgroundTransparency=v})
+            local wheelCursor = Frame(wheelClip, {Size=UDim2.new(0,12,0,12), AnchorPoint=Vector2.new(0.5,0.5), BackgroundColor3=Color3.new(1,1,1), ZIndex=5})
+            Corner(wheelCursor, 6); Stroke(wheelCursor, Color3.new(0,0,0), 1.5, 0)
+
+            local function hsToCursorPos()
+                local angle = h * 2 * math.pi
+                local dist  = s * WHEEL_MID
+                return WHEEL_MID + dist * math.cos(angle), WHEEL_MID - dist * math.sin(angle)
+            end
+
+            syncWheelFromHSV = function()
+                local cx, cy = hsToCursorPos()
+                wheelCursor.Position = UDim2.new(0, cx, 0, cy)
+                valOverlay.BackgroundTransparency = v
+            end
+            syncWheelFromHSV()
+
+            local function applyWheelPos(mx, my)
+                local ax = wheelClip.AbsolutePosition.X; local ay = wheelClip.AbsolutePosition.Y
+                local lx = mx-ax-WHEEL_MID; local ly = my-ay-WHEEL_MID
+                local dist = math.sqrt(lx*lx+ly*ly)
+                local angle = math.atan2(-ly, lx)
+                if angle < 0 then angle = angle + 2*math.pi end
+                h = angle/(2*math.pi); s = math.clamp(dist/WHEEL_MID,0,1)
+                syncWheelFromHSV(); syncRGBFromHSV(); fireCallback()
+            end
+
+            local wheelHit = Btn(wheelClip, {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text="", ZIndex=4})
+            -- OPT: shared drag dispatcher for wheel
+            wheelHit.InputBegan:Connect(function(i)
+                if i.UserInputType==Enum.UserInputType.MouseButton1
+                or i.UserInputType==Enum.UserInputType.Touch then
+                    registerDrag(i,
+                        function(mi) applyWheelPos(mi.Position.X, mi.Position.Y) end,
+                        function(_) end
+                    )
+                end
+            end)
+
+            local V_W, V_H = 18, WHEEL_SIZE
+            local vTrack = Frame(wheelPanel, {Size=UDim2.new(0,V_W,0,V_H), Position=UDim2.new(0,WHEEL_SIZE+8,0,0), BackgroundColor3=Color3.new(0,0,0)})
+            Corner(vTrack, 5)
+            local vGrad = Instance.new("UIGradient", vTrack); vGrad.Rotation = 90
+            local function updateVGrad() vGrad.Color = ColorSequence.new(Color3.fromHSV(h,s,1), Color3.new(0,0,0)) end
+            updateVGrad()
+
+            local vKnob = Frame(vTrack, {Size=UDim2.new(1,4,0,10), AnchorPoint=Vector2.new(0.5,0.5), Position=UDim2.new(0.5,0,1-v,0), BackgroundColor3=Color3.new(1,1,1), ZIndex=3})
+            Corner(vKnob, 3); Stroke(vKnob, Color3.new(0,0,0), 1.5, 0)
+
+            local vDrag = false
+            local vHit = Btn(vTrack, {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text="", ZIndex=2})
+
+            local function applyV(sy)
+                local ay = vTrack.AbsolutePosition.Y; local ah = vTrack.AbsoluteSize.Y
+                v = 1-math.clamp((sy-ay)/ah,0,1)
+                vKnob.Position = UDim2.new(0.5,0,1-v,0)
+                valOverlay.BackgroundTransparency = v
+                updateVGrad(); syncRGBFromHSV(); fireCallback()
+            end
+
+            -- OPT: shared drag dispatcher for value slider
+            vHit.InputBegan:Connect(function(i)
+                if i.UserInputType==Enum.UserInputType.MouseButton1
+                or i.UserInputType==Enum.UserInputType.Touch then
+                    vDrag = true
+                    registerDrag(i,
+                        function(mi) applyV(mi.Position.Y) end,
+                        function(_)  vDrag = false end
+                    )
+                end
+            end)
+
+            local hexRow = Frame(wheelPanel, {Size=UDim2.new(0,WHEEL_SIZE+8+V_W,0,24), Position=UDim2.new(0,0,0,WHEEL_SIZE+6), BackgroundTransparency=1})
+            Label(hexRow, {Size=UDim2.new(0,26,1,0), Text="#HEX", Font=Enum.Font.GothamBold, TextSize=10, TextColor3=Theme.TextSecondary})
+            local hexBox = Box(hexRow, {Size=UDim2.new(1,-30,1,0), Position=UDim2.new(0,30,0,0), BackgroundColor3=Theme.BgElement2, Font=Enum.Font.Code, TextSize=11, Text="", TextXAlignment=Enum.TextXAlignment.Left})
+            Corner(hexBox, 4)
+            local hexPad = Instance.new("UIPadding", hexBox); hexPad.PaddingLeft = UDim.new(0,5)
+
+            local function toHex()
+                local r2,g2,b2 = hsvToRGB()
+                return string.format("%02X%02X%02X", r2, g2, b2)
+            end
+            local function syncHex() hexBox.Text = toHex() end
+
+            hexBox.FocusLost:Connect(function()
+                local hex = hexBox.Text:gsub("#",""):upper()
+                if #hex == 6 then
+                    local ri = tonumber(hex:sub(1,2),16)
+                    local gi = tonumber(hex:sub(3,4),16)
+                    local bi = tonumber(hex:sub(5,6),16)
+                    if ri and gi and bi then
+                        local col = Color3.fromRGB(ri,gi,bi)
+                        h,s,v = Color3.toHSV(col)
+                        syncWheelFromHSV(); updateVGrad(); syncRGBFromHSV(); fireCallback()
+                    end
+                end
+                syncHex()
+            end)
+
+            local rgbLayout = Instance.new("UIListLayout", rgbPanel)
+            rgbLayout.Padding = UDim.new(0,5); rgbLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+            local rSetFn, gSetFn, bSetFn
+            local rr, gg, bb
+            do local r2,g2,b2 = hsvToRGB(); rr=r2; gg=g2; bb=b2 end
+
+            function updateHSVFromRGB()
+                local col = Color3.fromRGB(rr,gg,bb)
+                h,s,v = Color3.toHSV(col)
+                _cachedColor = col  -- OPT: set cache directly, skip extra fromHSV in recomputeColor
+                syncWheelFromHSV(); updateVGrad(); syncHex(); fireCallback()
+            end
+
+            local function makeRGBSlider(lbl, initVal, onSet, order)
+                local row = Frame(rgbPanel, {LayoutOrder=order, Size=UDim2.new(1,0,0,26), BackgroundTransparency=1})
+                Label(row, {Size=UDim2.new(0,12,1,0), Text=lbl, Font=Enum.Font.GothamBold, TextSize=10, TextColor3=Theme.TextSecondary})
+                local tk = Frame(row, {Size=UDim2.new(1,-46,0,6), Position=UDim2.new(0,16,0.5,-3), BackgroundColor3=Theme.BgElement2})
+                Corner(tk,3)
+                local fl = Frame(tk, {Size=UDim2.new(initVal/255,0,1,0), BackgroundColor3=Theme.Accent})
+                Corner(fl,3)
+                local kn = Frame(tk, {Size=UDim2.new(0,12,0,12), BackgroundColor3=Color3.new(1,1,1)})
+                kn.AnchorPoint = Vector2.new(0.5,0.5)
+                kn.Position = UDim2.new(initVal/255,0,0.5,0)
+                Corner(kn,6)
+                local vb = Box(row, {Size=UDim2.new(0,28,1,0), Position=UDim2.new(1,-28,0,0), BackgroundColor3=Theme.BgElement2, Font=Enum.Font.Code, TextSize=10, Text=tostring(initVal), TextXAlignment=Enum.TextXAlignment.Center})
+                Corner(vb,3)
+
+                local cur = initVal
+                local function setVal(nv)
+                    nv = math.clamp(math.floor(nv+0.5),0,255); cur = nv
+                    fl.Size = UDim2.new(nv/255,0,1,0); kn.Position = UDim2.new(nv/255,0,0.5,0)
+                    vb.Text = tostring(nv); onSet(nv)
+                end
+
+                local drg = false
+                local function rFromTk(i)
+                    return math.clamp((i.Position.X-tk.AbsolutePosition.X)/tk.AbsoluteSize.X,0,1)*255
+                end
+                -- OPT: shared drag dispatcher
+                tk.InputBegan:Connect(function(i)
+                    if i.UserInputType==Enum.UserInputType.MouseButton1
+                    or i.UserInputType==Enum.UserInputType.Touch then
+                        drg=true
+                        registerDrag(i,
+                            function(mi) setVal(rFromTk(mi)); onSet(cur); updateHSVFromRGB() end,
+                            function(_)  drg=false end
+                        )
+                    end
+                end)
+                vb.FocusLost:Connect(function() setVal(tonumber(vb.Text) or cur); onSet(cur); updateHSVFromRGB() end)
+                return function(nv) setVal(nv) end
+            end
+
+            rSetFn = makeRGBSlider("R", rr, function(nv) rr=nv end, 1)
+            gSetFn = makeRGBSlider("G", gg, function(nv) gg=nv end, 2)
+            bSetFn = makeRGBSlider("B", bb, function(nv) bb=nv end, 3)
+
+            syncRGBFromHSV = function()
+                -- OPT: recomputeColor() will be called by fireCallback; call it once here
+                -- so hsvToRGB (which reads _cachedColor) is accurate before we read RGB
+                recomputeColor()
+                local r2,g2,b2 = hsvToRGB(); rr=r2; gg=g2; bb=b2
+                rSetFn(r2); gSetFn(g2); bSetFn(b2); updateVGrad(); syncHex()
+            end
+            syncHex()
+
+            local function switchTab(to)
+                activeTab = to
+                if to == "wheel" then
+                    T(tabPill, {Position=UDim2.new(0,2,0,2)}, 0.15)
+                    wheelTabBtn.TextColor3 = Theme.TextAccent; rgbTabBtn.TextColor3 = Theme.TextSecondary
+                    wheelPanel.Visible = true; rgbPanel.Visible = false
+                else
+                    T(tabPill, {Position=UDim2.new(0.5,2,0,2)}, 0.15)
+                    wheelTabBtn.TextColor3 = Theme.TextSecondary; rgbTabBtn.TextColor3 = Theme.TextAccent
+                    wheelPanel.Visible = false; rgbPanel.Visible = true
+                end
+                if exp then T(f, {Size=UDim2.new(1,0,0,expandedH())}, 0.15) end
+            end
+
+            wheelTabBtn.MouseButton1Click:Connect(function() switchTab("wheel") end)
+            rgbTabBtn.MouseButton1Click:Connect(function() switchTab("rgb") end)
+            switchTab("wheel")
+        end
+
+        -- ── Progress Bar ──────────────────────────────────────────────────────
+        function TabElements:CreateProgressBar(labelText, initVal, maxVal)
+            initVal=initVal or 0; maxVal=maxVal or 100
+            local f=ElemFrame(42); f.Size=UDim2.new(1,0,0,42)
+            Label(f,{Size=UDim2.new(1,-60,0,20),Position=UDim2.new(0,10,0,4),Text=labelText,TextSize=12,TextColor3=Theme.TextSecondary,TextXAlignment=Enum.TextXAlignment.Left})
+            local pct=Label(f,{Size=UDim2.new(0,50,0,20),Position=UDim2.new(1,-58,0,4),Text=math.floor(initVal/maxVal*100).."%",TextSize=12,Font=Enum.Font.GothamBold,TextColor3=Theme.TextAccent,TextXAlignment=Enum.TextXAlignment.Right})
+            local trk=Frame(f,{Size=UDim2.new(1,-20,0,7),Position=UDim2.new(0,10,0,28),BackgroundColor3=Theme.BgElement2}); Corner(trk,4)
+            local fl=Frame(trk,{Size=UDim2.new(math.clamp(initVal/maxVal,0,1),0,1,0),BackgroundColor3=Theme.Accent}); Corner(fl,4)
+            local fg=Instance.new("UIGradient",fl); fg.Color=ColorSequence.new(Color3.fromRGB(90,0,160),Theme.Accent)
+            local PB={}
+            function PB:SetValue(val) local r=math.clamp(val/maxVal,0,1); T(fl,{Size=UDim2.new(r,0,1,0)},0.3); pct.Text=math.floor(r*100).."%" end
+            function PB:SetVisible(v) f.Visible=v end
+            return PB
+        end
+
+        -- ── Search Bar ────────────────────────────────────────────────────────
+        function TabElements:CreateSearchBar(placeholder)
+            local f=Frame(scroll,{LayoutOrder=nxt(),Size=UDim2.new(1,0,0,32),BackgroundColor3=Theme.BgElement})
+            Corner(f,7); Stroke(f,Theme.Accent,1,0.65)
+            Label(f,{Size=UDim2.new(0,28,1,0),Text=">>",Font=Enum.Font.GothamBold,TextSize=11,TextColor3=Theme.Accent})
+            local inp=Box(f,{Size=UDim2.new(1,-34,1,0),Position=UDim2.new(0,28,0,0),PlaceholderText=placeholder or "Search elements...",BackgroundColor3=Color3.new(0,0,0),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=12})
+            -- OPT: cache searchable children; debounce by last query
+            local _searchCache = nil
+            local _lastQuery = ""
+            inp:GetPropertyChangedSignal("Text"):Connect(function()
+                local q = inp.Text:lower()
+                if q == _lastQuery then return end
+                _lastQuery = q
+                -- Build cache once (after all elements are added)
+                if not _searchCache then
+                    _searchCache = {}
+                    for _, child in ipairs(scroll:GetChildren()) do
+                        if child ~= f and not child:IsA("UIListLayout") and not child:IsA("UIPadding") then
+                            local lbl = child:FindFirstChildOfClass("TextLabel")
+                            if lbl then table.insert(_searchCache, {frame=child, lbl=lbl}) end
+                        end
+                    end
+                end
+                for _, entry in ipairs(_searchCache) do
+                    entry.frame.Visible = q == "" or entry.lbl.Text:lower():find(q, 1, true) ~= nil
+                end
+            end)
+        end
+
+        -- ── Table ─────────────────────────────────────────────────────────────
+        function TabElements:CreateTable(headers, rows)
+            local rowH = 26
+            local totalH = rowH + #rows * rowH + 4
+            local f = ElemFrame(totalH); f.Size=UDim2.new(1,0,0,totalH)
+            local colW = 1/#headers
+            local hRow=Frame(f,{Size=UDim2.new(1,0,0,rowH),BackgroundColor3=Theme.AccentDark}); Corner(hRow,6)
+            for i,h in ipairs(headers) do
+                Label(hRow,{Size=UDim2.new(colW,0,1,0),Position=UDim2.new(colW*(i-1),0,0,0),Text=h,Font=Enum.Font.GothamBold,TextSize=11,TextColor3=Color3.new(1,1,1)})
+            end
+            for ri, row in ipairs(rows) do
+                local bg = ri%2==0 and Theme.BgElement2 or Theme.BgElement
+                local rRow=Frame(f,{Size=UDim2.new(1,0,0,rowH),Position=UDim2.new(0,0,0,rowH+(ri-1)*rowH),BackgroundColor3=bg})
+                for ci, cell in ipairs(row) do
+                    Label(rRow,{Size=UDim2.new(colW,0,1,0),Position=UDim2.new(colW*(ci-1),0,0,0),Text=tostring(cell),TextSize=11,TextColor3=Theme.TextSecondary})
+                end
+                local hit=Btn(rRow,{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text=""})
+                hit.MouseEnter:Connect(function() T(rRow,{BackgroundColor3=Theme.AccentDark},0.1) end)
+                hit.MouseLeave:Connect(function() T(rRow,{BackgroundColor3=bg},0.1) end)
+            end
+        end
+
+        return TabElements
+    end
+
+    -- ── Window-level API ──────────────────────────────────────────────────────
+    function Window:SetTab(name)
+        if self._tabs[name] then self._tabs[name]() end
+    end
+
+    function Window:OnTabOpen(name, fn)
+        if not self._tabOpenCallbacks[name] then
+            self._tabOpenCallbacks[name] = {}
+        end
+        table.insert(self._tabOpenCallbacks[name], fn)
+    end
+
+    sg.Destroying:Connect(function()
+        for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
+        table.clear(connections)
+        table.clear(Window._allElements)
+    end)
+
+    return Window
+end
+
+return Library
