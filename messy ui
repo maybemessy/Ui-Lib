@@ -1458,7 +1458,24 @@ function Library:CreateWindow(Config)
                 T(knob,{Position=s and UDim2.new(1,-17,0.5,-7.5) or UDim2.new(0,2,0.5,-7.5)},0.15); pcall(callback,s)
             end
             hit.MouseButton1Click:Connect(function() setState(not state) end)
-            hit.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.Touch then setState(not state) end end)
+            -- ── FIX: Mobile tap detection ─────────────────────────────────────
+            -- The old code toggled on any TouchEnded, so dragging/scrolling also
+            -- fired the toggle. Now we record the touch start position and only
+            -- toggle if the finger barely moved (i.e. it was a tap, not a swipe).
+            local _touchStartPos = nil
+            hit.InputBegan:Connect(function(i)
+                if i.UserInputType == Enum.UserInputType.Touch then
+                    _touchStartPos = Vector2.new(i.Position.X, i.Position.Y)
+                end
+            end)
+            hit.InputEnded:Connect(function(i)
+                if i.UserInputType == Enum.UserInputType.Touch and _touchStartPos then
+                    local dist = (Vector2.new(i.Position.X, i.Position.Y) - _touchStartPos).Magnitude
+                    if dist < 10 then setState(not state) end
+                    _touchStartPos = nil
+                end
+            end)
+            -- ─────────────────────────────────────────────────────────────────
             regElem(text, function() return state end, function(v) setState(v==true or v=="true") end)
             local ToggleObj={}
             function ToggleObj:SetValue(v) setState(v) end
