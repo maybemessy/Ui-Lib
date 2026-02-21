@@ -1447,39 +1447,77 @@ function Library:CreateWindow(Config)
         function TabElements:CreateToggle(text, default, callback)
             local state = default or false
             local f = ElemFrame(32)
+
+            -- Label covering the left portion (non-interactive area)
             Label(f, {Size=UDim2.new(1,-60,1,0), Position=UDim2.new(0,10,0,0), Text=text, TextXAlignment=Enum.TextXAlignment.Left})
-            local track = Frame(f, {Size=UDim2.new(0,38,0,20), Position=UDim2.new(1,-48,0.5,-10), BackgroundColor3=state and Theme.Accent or Theme.BgElement2})
-            Corner(track,10)
-            local knob = Frame(track, {Size=UDim2.new(0,15,0,15), Position=state and UDim2.new(1,-17,0.5,-7.5) or UDim2.new(0,2,0.5,-7.5), BackgroundColor3=Color3.new(1,1,1)})
-            Corner(knob,8)
-            local hit = Btn(f, {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text="", Active=true})
+
+            -- Track is now a TextButton so it receives input directly on mobile
+            -- without the ScrollingFrame stealing it first. AutoButtonColor=false
+            -- so we handle all visuals ourselves.
+            local track = Btn(f, {
+                Size             = UDim2.new(0,38,0,20),
+                Position         = UDim2.new(1,-48,0.5,-10),
+                BackgroundColor3 = state and Theme.Accent or Theme.BgElement2,
+                Text             = "",
+                ZIndex           = 3,
+            })
+            Corner(track, 10)
+
+            -- Knob is a plain Frame child of track — purely visual, never interactive
+            local knob = Frame(track, {
+                Size             = UDim2.new(0,15,0,15),
+                Position         = state and UDim2.new(1,-17,0.5,-7.5) or UDim2.new(0,2,0.5,-7.5),
+                BackgroundColor3 = Color3.new(1,1,1),
+                ZIndex           = 4,
+            })
+            Corner(knob, 8)
+
+            -- Wider invisible hit zone that also covers the label area so tapping
+            -- anywhere on the row works, but it sits UNDER the track button (ZIndex=2)
+            -- so the track button always wins when you tap the knob/track directly.
+            local rowHit = Btn(f, {
+                Size             = UDim2.new(1,0,1,0),
+                BackgroundTransparency = 1,
+                Text             = "",
+                ZIndex           = 2,
+            })
+
             local function setState(s)
-                state=s; T(track,{BackgroundColor3=s and Theme.Accent or Theme.BgElement2},0.15)
-                T(knob,{Position=s and UDim2.new(1,-17,0.5,-7.5) or UDim2.new(0,2,0.5,-7.5)},0.15); pcall(callback,s)
+                state = s
+                T(track, {BackgroundColor3 = s and Theme.Accent or Theme.BgElement2}, 0.15)
+                T(knob,  {Position = s and UDim2.new(1,-17,0.5,-7.5) or UDim2.new(0,2,0.5,-7.5)}, 0.15)
+                pcall(callback, s)
             end
-            hit.MouseButton1Click:Connect(function() setState(not state) end)
-            -- ── FIX: Mobile tap detection ─────────────────────────────────────
-            -- The old code toggled on any TouchEnded, so dragging/scrolling also
-            -- fired the toggle. Now we record the touch start position and only
-            -- toggle if the finger barely moved (i.e. it was a tap, not a swipe).
-            local _touchStartPos = nil
-            hit.InputBegan:Connect(function(i)
+
+            -- Desktop: plain click on either the track or the row hit zone
+            track.MouseButton1Click:Connect(function() setState(not state) end)
+            rowHit.MouseButton1Click:Connect(function() setState(not state) end)
+
+            -- Mobile: use InputBegan/Ended with a movement threshold so scrolling
+            -- the list never accidentally toggles. Both track and rowHit share the
+            -- same handler via a single upvalue.
+            local _tStart = nil
+            local function onTouchBegan(i)
                 if i.UserInputType == Enum.UserInputType.Touch then
-                    _touchStartPos = Vector2.new(i.Position.X, i.Position.Y)
+                    _tStart = Vector2.new(i.Position.X, i.Position.Y)
                 end
-            end)
-            hit.InputEnded:Connect(function(i)
-                if i.UserInputType == Enum.UserInputType.Touch and _touchStartPos then
-                    local dist = (Vector2.new(i.Position.X, i.Position.Y) - _touchStartPos).Magnitude
-                    if dist < 10 then setState(not state) end
-                    _touchStartPos = nil
+            end
+            local function onTouchEnded(i)
+                if i.UserInputType == Enum.UserInputType.Touch and _tStart then
+                    local dist = (Vector2.new(i.Position.X, i.Position.Y) - _tStart).Magnitude
+                    if dist < 12 then setState(not state) end
+                    _tStart = nil
                 end
-            end)
-            -- ─────────────────────────────────────────────────────────────────
+            end
+            track.InputBegan:Connect(onTouchBegan)
+            track.InputEnded:Connect(onTouchEnded)
+            rowHit.InputBegan:Connect(onTouchBegan)
+            rowHit.InputEnded:Connect(onTouchEnded)
+
             regElem(text, function() return state end, function(v) setState(v==true or v=="true") end)
-            local ToggleObj={}
+            local ToggleObj = {}
             function ToggleObj:SetValue(v) setState(v) end
-            function ToggleObj:SetVisible(v) f.Visible=v end
+            function ToggleObj:SetVisible(v) f.Visible = v end
             return ToggleObj
         end
 
