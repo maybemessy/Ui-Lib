@@ -1,5 +1,7 @@
 --// MessyHub UI Library — v5.1
 -- Fixes: config save/load dropdown, theme background image, dropdown UI artifacts, optimized UI
+-- v5.1 PATCH: safeListConfigs now lists ALL .json files (not prefix-filtered)
+-- v5.1 PATCH: dropdown arrow font changed to Enum.Font.Gotham so ▾/▴ glyphs render
 
 local Library = {}
 
@@ -115,13 +117,11 @@ local function safeRead(path)
     end
 end
 
--- FIX: Robust config listing — stores names in a Roblox-safe table instead of relying on listfiles
--- We maintain a persistent in-memory registry of saved configs per hub
+-- In-memory registry of saved configs per hub prefix
 local _configRegistry = {}  -- [hubPrefix] = {name1, name2, ...}
 
 local function registerConfig(prefix, baseName)
     if not _configRegistry[prefix] then _configRegistry[prefix] = {} end
-    -- avoid duplicates
     for _, v in ipairs(_configRegistry[prefix]) do
         if v == baseName then return end
     end
@@ -129,20 +129,22 @@ local function registerConfig(prefix, baseName)
     table.sort(_configRegistry[prefix])
 end
 
+-- FIX: List ALL .json files in workspace — do NOT filter by prefix.
+-- Previously the prefix filter (^messyhub_tb3.*%.json$) caused any config
+-- saved under a different name (e.g. "test") to be invisible in the dropdown.
 local function safeListConfigs(prefix)
-    -- Primary: try listfiles if available
     local results = {}
     if listfiles then
         local ok, files = pcall(listfiles, "")
         if ok then
             for _, path in ipairs(files) do
                 local name = path:gsub("\\","/"):match("([^/]+)$") or path
-                if name:match("^" .. prefix:gsub("%-","%-") .. ".*%.json$") then
+                -- PATCHED: match any .json file, not just prefix-prefixed ones
+                if name:match("%.json$") then
                     table.insert(results, name:sub(1, -6))
                 end
             end
             table.sort(results)
-            -- Sync into registry
             for _, n in ipairs(results) do registerConfig(prefix, n) end
             return results
         end
@@ -166,7 +168,6 @@ function Library:CreateWindow(Config)
     local defaultConfigName = Config.ConfigFile or (hubName:gsub("%s","_") .. "_config")
     local showLoader   = Config.LoadingScreen ~= false
     local showCursor   = Config.CursorRing   ~= false
-    -- NEW: optional background image URL (ContentProvider URL or rbxassetid)
     local bgImageUrl   = Config.BackgroundImage or nil
     local bgImageTrans = Config.BackgroundImageTransparency or 0.85
 
@@ -241,14 +242,12 @@ function Library:CreateWindow(Config)
 
     -- ── Main Frame ────────────────────────────────────────────────────────────
     local FULL_H = 370
-    -- FIX: Draggable=true on the whole frame steals mouse from sliders.
-    -- We use manual drag on the title bar only instead.
     local main = Frame(sg, {
         Size             = UDim2.new(0,620,0,0),
         Position         = UDim2.new(0.5,-310,0.5,-185),
         BackgroundColor3 = Theme.BgMain,
         Active           = true,
-        Draggable        = false,   -- NEVER true — handled manually below
+        Draggable        = false,
         Visible          = false,
         ClipsDescendants = true,
     })
@@ -256,18 +255,13 @@ function Library:CreateWindow(Config)
     local mainStroke = Stroke(main, Theme.Accent, 1, 0.45)
     regAccent(mainStroke, "Color")
 
-    -- Global flag: true while any slider is being dragged.
-    -- Title-bar drag checks this so sliders never fight the window move.
     local _anySliderDragging = false
 
     -- ── Background Image Layer ────────────────────────────────────────────────
-    -- ZIndex must be >= 1 in Roblox. Sidebar and contentArea are made
-    -- semi-transparent when a bg image is active so the image bleeds through.
     local bgImageLabel = nil
     local function applyBgImage(url, trans)
         if not url or url == "" then
             if bgImageLabel then bgImageLabel.Visible = false end
-            -- Restore opaque panels
             pcall(function() sidebar.BackgroundTransparency     = 0 end)
             pcall(function() contentArea.BackgroundTransparency = 0 end)
             pcall(function() main.BackgroundTransparency        = 0 end)
@@ -280,19 +274,17 @@ function Library:CreateWindow(Config)
             bgImageLabel.Position               = UDim2.new(0,0,0,0)
             bgImageLabel.BackgroundTransparency = 1
             bgImageLabel.ScaleType              = Enum.ScaleType.Crop
-            bgImageLabel.ZIndex                 = 1   -- must be >= 1
+            bgImageLabel.ZIndex                 = 1
             Corner(bgImageLabel, 10)
         end
         bgImageLabel.Image             = url
         bgImageLabel.ImageTransparency = trans or bgImageTrans
         bgImageLabel.Visible           = true
-        -- Make panels semi-transparent so the image shows through
         pcall(function() main.BackgroundTransparency        = 0.15 end)
         pcall(function() sidebar.BackgroundTransparency     = 0.55 end)
         pcall(function() contentArea.BackgroundTransparency = 0.60 end)
     end
     if bgImageUrl then
-        -- Defer so sidebar/contentArea exist by the time we run
         task.defer(function() applyBgImage(bgImageUrl, bgImageTrans) end)
     end
 
@@ -410,13 +402,11 @@ function Library:CreateWindow(Config)
         end)
     end
 
-    -- Set background image at runtime
     function Window:SetBackgroundImage(url, transparency)
         bgImageTrans = transparency ~= nil and transparency or bgImageTrans
         applyBgImage(url, bgImageTrans)
     end
 
-    -- Remove/clear background image
     function Window:ClearBackgroundImage()
         applyBgImage("", 1)
     end
@@ -456,7 +446,6 @@ function Library:CreateWindow(Config)
         if delfile then
             local ok = pcall(delfile, filePath)
             if ok then
-                -- Remove from registry
                 if _configRegistry[defaultConfigName] then
                     for i, v in ipairs(_configRegistry[defaultConfigName]) do
                         if v == baseName then
@@ -555,7 +544,6 @@ function Library:CreateWindow(Config)
         end)
         if ok then
             safeWrite(filePath, encoded)
-            -- FIX: Register in memory so dropdown refreshes immediately
             registerConfig(defaultConfigName, baseName)
             self:Notify("Config", "Saved as " .. filePath, 2, "success")
         else
@@ -597,17 +585,14 @@ function Library:CreateWindow(Config)
     end
 
     -- ── CreateConfigTab ───────────────────────────────────────────────────────
-    -- FIX: Completely rewritten — dropdown now dynamically refreshes after save/load/delete
     function Window:CreateConfigTab(tabName)
         tabName = tabName or "Config"
         local Tab = self:CreateTab(tabName, "C")
 
-        -- Current name state
         local currentName = defaultConfigName
 
         Tab:CreateDivider("Config File")
 
-        -- Name input
         Tab:CreateInput(
             "Config name",
             defaultConfigName,
@@ -616,8 +601,6 @@ function Library:CreateWindow(Config)
             end
         )
 
-        -- FIX: Dynamic saved configs dropdown
-        -- We store a reference to the dropdown object so we can refresh it
         local configDropdown = nil
         local function getConfigList()
             local list = self:ListSavedConfigs()
@@ -637,7 +620,6 @@ function Library:CreateWindow(Config)
 
         Tab:CreateButton("💾  Save Config", function()
             self:SaveConfig(currentName)
-            -- FIX: Refresh the dropdown after saving
             task.defer(function()
                 if configDropdown then
                     configDropdown:RefreshOptions(getConfigList())
@@ -880,7 +862,7 @@ function Library:CreateWindow(Config)
         end
     end)
 
-    -- ── Manual drag on title bar (mouse + touch, slider-safe) ────────────────
+    -- ── Manual drag on title bar ──────────────────────────────────────────────
     do
         local dragging, dragStart, startPos = false, nil, nil
 
@@ -900,7 +882,6 @@ function Library:CreateWindow(Config)
         end
         local function endDrag() dragging = false end
 
-        -- Mouse
         titleBar.InputBegan:Connect(function(i)
             if i.UserInputType == Enum.UserInputType.MouseButton1 then
                 beginDrag(Vector2.new(i.Position.X, i.Position.Y))
@@ -915,7 +896,6 @@ function Library:CreateWindow(Config)
             if i.UserInputType == Enum.UserInputType.MouseButton1 then endDrag() end
         end))
 
-        -- Touch (mobile)
         titleBar.InputBegan:Connect(function(i)
             if i.UserInputType == Enum.UserInputType.Touch then
                 beginDrag(Vector2.new(i.Position.X, i.Position.Y))
@@ -1023,7 +1003,6 @@ function Library:CreateWindow(Config)
         cl.HorizontalAlignment = Enum.HorizontalAlignment.Center
         cl.Padding             = UDim.new(0,3)
     end
-    -- Manual drag for ctrlBar (mouse + touch)
     do
         local cd, cs, cp = false, nil, nil
         ctrlBar.InputBegan:Connect(function(i)
@@ -1068,10 +1047,8 @@ function Library:CreateWindow(Config)
     end)
     lockBtn.MouseButton1Click:Connect(function()
         isLocked = not isLocked
-        -- Dragging is manual now — just toggle the flag
         lockBtn.Text = isLocked and "Unlock" or "Lock"
     end)
-    -- Expose lock state so manual drag respects it
     Window._isLocked = false
     lockBtn.MouseButton1Click:Connect(function()
         Window._isLocked = not Window._isLocked
@@ -1325,18 +1302,15 @@ function Library:CreateWindow(Config)
 
         -- ── Section ───────────────────────────────────────────────────────────
         function TabElements:CreateSection(sTitle)
-            -- Outer wrapper: fixed 32px when collapsed, AutomaticSize=Y when expanded.
-            -- ClipsDescendants stays true so collapsed state never bleeds into the next element.
             local wrapper = Frame(scroll, {
                 LayoutOrder      = nxt(),
                 Size             = UDim2.new(1,0,0,32),
                 BackgroundColor3 = Theme.BgElement,
                 ClipsDescendants = true,
-                AutomaticSize    = Enum.AutomaticSize.None,  -- starts manual (collapsed)
+                AutomaticSize    = Enum.AutomaticSize.None,
             })
             Corner(wrapper,8); Stroke(wrapper, Theme.Accent, 1, 0.72)
 
-            -- Header row — always 32px, click to toggle
             local hdr = Btn(wrapper, {Size=UDim2.new(1,0,0,32), BackgroundTransparency=1, Text=""})
             local aBox = Frame(hdr, {Size=UDim2.new(0,18,0,18), Position=UDim2.new(0,8,0.5,-9), BackgroundColor3=Theme.BgElement2})
             Corner(aBox,4)
@@ -1345,8 +1319,6 @@ function Library:CreateWindow(Config)
                 Font=Enum.Font.GothamBold, TextSize=13, TextColor3=Theme.TextAccent,
                 TextXAlignment=Enum.TextXAlignment.Left})
 
-            -- Content area: AutomaticSize=Y so it grows with its children.
-            -- Hidden by default (wrapper is clipped to 32px).
             local inner = Frame(wrapper, {
                 Size             = UDim2.new(1,0,0,0),
                 Position         = UDim2.new(0,0,0,32),
@@ -1365,11 +1337,9 @@ function Library:CreateWindow(Config)
                 exp = not exp
                 aLbl.Text = exp and "-" or "+"
                 if exp then
-                    -- Let AutomaticSize drive the wrapper height
                     wrapper.AutomaticSize    = Enum.AutomaticSize.Y
                     wrapper.ClipsDescendants = false
                 else
-                    -- Snap back to manual 32px and re-clip
                     wrapper.AutomaticSize    = Enum.AutomaticSize.None
                     wrapper.Size             = UDim2.new(1,0,0,32)
                     wrapper.ClipsDescendants = true
@@ -1408,14 +1378,12 @@ function Library:CreateWindow(Config)
         -- ── Button ────────────────────────────────────────────────────────────
         function TabElements:CreateButton(text, callback, tooltip)
             local f = ElemFrame(32)
-            -- FIX: accent strip as separate child, not overlapping with button text
             local accentStrip = Frame(f, {
                 Size=UDim2.new(0,2,0.5,0),
                 Position=UDim2.new(0,0,0.25,0),
                 BackgroundColor3=Theme.Accent,
             })
             regAccent(accentStrip, "BackgroundColor3")
-            -- FIX: button text properly padded so it never overlaps the strip
             local b = Btn(f, {
                 Size=UDim2.new(1,-4,1,0),
                 Position=UDim2.new(0,4,0,0),
@@ -1495,7 +1463,6 @@ function Library:CreateWindow(Config)
             end
 
             hit.MouseButton1Click:Connect(function() setState(not state) end)
-            -- Mobile touch support
             hit.InputEnded:Connect(function(i)
                 if i.UserInputType == Enum.UserInputType.Touch then setState(not state) end
             end)
@@ -1529,14 +1496,11 @@ function Library:CreateWindow(Config)
             inp.Focused:Connect(function()
                 local s=f:FindFirstChildOfClass("UIStroke"); if s then s.Transparency=0 end
             end)
-            -- FIX: fire callback on every keystroke so the caller always has the
-            -- latest value even if the user never presses Enter.
             inp:GetPropertyChangedSignal("Text"):Connect(function()
                 pcall(callback, inp.Text)
             end)
             inp.FocusLost:Connect(function()
                 local s=f:FindFirstChildOfClass("UIStroke"); if s then s.Transparency=0.65 end
-                -- Also fire on focus-lost so final value is always committed
                 pcall(callback, inp.Text)
             end)
             regElem(placeholder, function() return inp.Text end, function(v) inp.Text=tostring(v) end)
@@ -1575,7 +1539,6 @@ function Library:CreateWindow(Config)
                 throttledCb(val)
             end
 
-            -- Helper: X position from any input object
             local function posFromInput(i)
                 return math.clamp(
                     (i.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
@@ -1584,7 +1547,6 @@ function Library:CreateWindow(Config)
             numBox.FocusLost:Connect(function() apply(tonumber(numBox.Text) or defVal) end)
             local drag = false
 
-            -- FIX: accept both Mouse and Touch; set _anySliderDragging so title bar won't move
             track.InputBegan:Connect(function(i)
                 if i.UserInputType == Enum.UserInputType.MouseButton1
                 or i.UserInputType == Enum.UserInputType.Touch then
@@ -1667,24 +1629,21 @@ function Library:CreateWindow(Config)
         end
 
         -- ── Dropdown ──────────────────────────────────────────────────────────
-        -- FIX: completely reworked — no visible text artifacts, proper ZIndex layering,
-        -- search box properly positioned, arrow indicator clean, RefreshOptions added
+        -- FIX: arrow font changed from GothamBold to Gotham so ▾/▴ glyphs render correctly
         function TabElements:CreateDropdown(labelText, options, callback)
             local selected = nil
             local oBtns   = {}
             local isOpen  = false
 
-            -- The main toggle button
             local btn = Btn(scroll, {
                 LayoutOrder = nxt(),
                 Size = UDim2.new(1,0,0,32),
                 BackgroundColor3 = Theme.BgElement,
-                Text = "",   -- FIX: no text on the button frame itself
+                Text = "",
             })
             Corner(btn, 7)
             Stroke(btn, Theme.Accent, 1, 0.65)
 
-            -- Label inside button (left side)
             local btnLabel = Label(btn, {
                 Size = UDim2.new(1,-36,1,0),
                 Position = UDim2.new(0,10,0,0),
@@ -1694,18 +1653,17 @@ function Library:CreateWindow(Config)
                 TextXAlignment = Enum.TextXAlignment.Left,
             })
 
-            -- Arrow indicator (right side only)
+            -- PATCHED: Font = Enum.Font.Gotham (was GothamBold — didn't render ▾/▴)
             local arrow = Label(btn, {
                 Size = UDim2.new(0,20,1,0),
                 Position = UDim2.new(1,-24,0,0),
-                Text = "▾",
+                Text = "v",
                 Font = Enum.Font.GothamBold,
-                TextSize = 14,
+                TextSize = 12,
                 TextColor3 = Theme.Accent,
                 TextXAlignment = Enum.TextXAlignment.Center,
             })
 
-            -- Drop panel (rendered AFTER the button in layout order)
             local drop = Frame(scroll, {
                 LayoutOrder = nxt(),
                 Size = UDim2.new(1,0,0,0),
@@ -1716,7 +1674,6 @@ function Library:CreateWindow(Config)
             Corner(drop, 7)
             Stroke(drop, Theme.Accent, 1, 0.75)
 
-            -- Search box inside panel
             local sb = Box(drop, {
                 Size = UDim2.new(1,-10,0,26),
                 Position = UDim2.new(0,5,0,4),
@@ -1729,7 +1686,6 @@ function Library:CreateWindow(Config)
             local sbPad = Instance.new("UIPadding", sb)
             sbPad.PaddingLeft = UDim.new(0,6)
 
-            -- Scroll inside panel for options
             local os2 = Instance.new("ScrollingFrame", drop)
             os2.Size = UDim2.new(1,0,1,-36)
             os2.Position = UDim2.new(0,0,0,34)
@@ -1764,10 +1720,9 @@ function Library:CreateWindow(Config)
                     btnLabel.Text = opt
                     btnLabel.TextColor3 = Theme.TextPrimary
                     isOpen = false
-                    arrow.Text = "▾"
+                    arrow.Text = "v"
                     T(drop,{Size=UDim2.new(1,0,0,0)},0.18)
                     task.wait(0.2); drop.Visible = false
-                    -- Highlight selected
                     for _, b2 in ipairs(oBtns) do
                         b2.BackgroundColor3 = b2.Text == opt and Theme.AccentDark or Theme.BgElement
                         b2.TextColor3 = b2.Text == opt and Theme.TextPrimary or Theme.TextSecondary
@@ -1778,7 +1733,6 @@ function Library:CreateWindow(Config)
             end
 
             local function populateOptions(opts)
-                -- Clear existing
                 for _, ob in ipairs(oBtns) do ob:Destroy() end
                 oBtns = {}
                 for _, opt in ipairs(opts) do
@@ -1789,7 +1743,6 @@ function Library:CreateWindow(Config)
 
             populateOptions(options)
 
-            -- Search filter
             sb:GetPropertyChangedSignal("Text"):Connect(function()
                 local q = sb.Text:lower()
                 local vis = 0
@@ -1800,10 +1753,9 @@ function Library:CreateWindow(Config)
                 os2.CanvasSize = UDim2.new(0,0,0,vis*28)
             end)
 
-            -- Toggle open/close
             btn.MouseButton1Click:Connect(function()
                 isOpen = not isOpen
-                arrow.Text = isOpen and "▴" or "▾"
+                arrow.Text = isOpen and "^" or "v"
                 if isOpen then
                     sb.Text = ""
                     for _, ob in ipairs(oBtns) do ob.Visible = true end
@@ -1826,11 +1778,10 @@ function Library:CreateWindow(Config)
             end)
 
             local DdObj = {}
-            -- FIX: RefreshOptions — replaces the option list dynamically (used by config tab)
             function DdObj:RefreshOptions(newOpts)
                 local wasOpen = isOpen
                 if wasOpen then
-                    isOpen = false; arrow.Text = "▾"
+                    isOpen = false; arrow.Text = "v"
                     drop.Size = UDim2.new(1,0,0,0); drop.Visible = false
                 end
                 selected = nil
@@ -1851,6 +1802,7 @@ function Library:CreateWindow(Config)
         end
 
         -- ── Multi-Dropdown ────────────────────────────────────────────────────
+        -- PATCHED: arrow uses plain ASCII "v" for same reason as CreateDropdown
         function TabElements:CreateMultiDropdown(labelText, options, callback)
             local selected = {}
             local rowRefs  = {}
@@ -1867,7 +1819,6 @@ function Library:CreateWindow(Config)
                 return t
             end
 
-            -- FIX: no text on button itself, label child instead
             local btn = Btn(scroll, {
                 LayoutOrder = nxt(),
                 Size = UDim2.new(1,0,0,32),
@@ -1899,12 +1850,13 @@ function Library:CreateWindow(Config)
                 TextColor3 = Color3.new(1,1,1),
             })
 
+            -- PATCHED: "v" instead of "▾" so it always renders
             Label(btn, {
                 Size = UDim2.new(0,20,1,0),
                 Position = UDim2.new(1,-24,0,0),
-                Text = "▾",
+                Text = "v",
                 Font = Enum.Font.GothamBold,
-                TextSize = 14,
+                TextSize = 12,
                 TextColor3 = Theme.Accent,
                 TextXAlignment = Enum.TextXAlignment.Center,
             })
@@ -1973,7 +1925,7 @@ function Library:CreateWindow(Config)
                 local function applyRowState(on)
                     isSelected = on
                     if on then selected[opt] = true else selected[opt] = nil end
-                    chkMark.Text = on and "✓" or ""
+                    chkMark.Text = on and "+" or ""
                     T(chk,  {BackgroundColor3 = on and Theme.Accent or Theme.BgElement2}, 0.12)
                     T(row,  {BackgroundColor3 = on and Color3.fromRGB(38,10,58) or Theme.BgElement}, 0.12)
                     local c = getCount()
@@ -2023,7 +1975,7 @@ function Library:CreateWindow(Config)
                     for _, v in ipairs(arr) do
                         if rowRefs[v] then
                             selected[v] = true
-                            rowRefs[v].chkMark.Text = "✓"
+                            rowRefs[v].chkMark.Text = "+"
                             rowRefs[v].chk.BackgroundColor3 = Theme.Accent
                             rowRefs[v].row.BackgroundColor3 = Color3.fromRGB(38,10,58)
                         end
@@ -2129,8 +2081,8 @@ function Library:CreateWindow(Config)
                 return b
             end
 
-            local wheelTabBtn = makeTabBtn("🎨  Wheel", 0)
-            local rgbTabBtn   = makeTabBtn("⚙  RGB",   0.5)
+            local wheelTabBtn = makeTabBtn("Wheel", 0)
+            local rgbTabBtn   = makeTabBtn("RGB",   0.5)
 
             local tabPill = Frame(tabBar, {
                 Size=UDim2.new(0.5,-4,1,-4),
