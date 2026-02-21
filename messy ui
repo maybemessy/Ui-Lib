@@ -1,22 +1,4 @@
 --// MessyHub UI Library — v5.4
--- v5.4 FIX 1: _activeDragFn/_activeEndFn hoisted to window scope — fixes sliders not sliding
---             in tabs 2+ and GUI drag lock never releasing
--- v5.4 FIX 2: _anySliderDragging always cleared in the shared InputEnded handler
--- v5.4 FIX 3: Background transparency slider updates bgImageLabel.ImageTransparency live
--- v5.4 FIX 4: Lock button now actually blocks drag — isLocked hoisted above the drag block
---             so beginDrag reads the same variable the button toggles; removed duplicate connection
--- v5.3 FIX 1: _cachedColor hoisted above hsvToRGB — fixes "attempt to index nil with 'R'" crash
--- v5.3 FIX 2: ScreenGui name randomised + gethui/protect_gui/pcall layered parenting
--- v5.3 FIX 3: Window:CreateThemeTab() — dedicated theme tab
--- v5.2 OPT 1: Cursor ring moved from RenderStepped → Heartbeat
--- v5.2 OPT 2: FPS counter moved from RenderStepped → Heartbeat
--- v5.2 OPT 3: Spinner self-disconnects on destroy
--- v5.2 OPT 4: double task.defer replaced with RunService.Stepped:Wait() once
--- v5.2 OPT 5: SetTheme accentObjs skips dead refs without pcall
--- v5.2 OPT 6: Color picker — single Color3.fromHSV shared across fireCallback/syncRGB/toHex
--- v5.2 OPT 7: Dropdown/SearchBar text filter debounced
--- v5.2 OPT 8: selectTab caches scrollFrames list
--- v5.2 OPT 9: Slider/StepSlider/ColorPicker share one InputChanged/InputEnded each
 
 local Library = {}
 
