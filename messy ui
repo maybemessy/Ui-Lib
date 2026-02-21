@@ -1,7 +1,12 @@
---// MessyHub UI Library — v5.3
+--// MessyHub UI Library — v5.4
+-- v5.4 FIX 1: _activeDragFn/_activeEndFn hoisted to window scope — fixes sliders not sliding
+--             in tabs 2+ and GUI drag lock never releasing (root cause: per-tab locals were
+--             invisible to the single shared UIS listener registered on the first tab only)
+-- v5.4 FIX 2: _anySliderDragging always cleared in the shared InputEnded handler
+-- v5.4 FIX 3: Background transparency slider updates bgImageLabel.ImageTransparency live
 -- v5.3 FIX 1: _cachedColor hoisted above hsvToRGB — fixes "attempt to index nil with 'R'" crash
--- v5.3 FIX 2: ScreenGui name randomised + gethui/protect_gui/pcall layered parenting — hides from DEX & anti-cheat scanners
--- v5.3 FIX 3: Window:CreateThemeTab() — dedicated theme tab with background image, accent presets, cursor toggle
+-- v5.3 FIX 2: ScreenGui name randomised + gethui/protect_gui/pcall layered parenting
+-- v5.3 FIX 3: Window:CreateThemeTab() — dedicated theme tab
 -- v5.2 OPT 1: Cursor ring moved from RenderStepped → Heartbeat
 -- v5.2 OPT 2: FPS counter moved from RenderStepped → Heartbeat
 -- v5.2 OPT 3: Spinner self-disconnects on destroy
@@ -378,6 +383,13 @@ function Library:CreateWindow(Config)
     end
 
     -- ── Window object ─────────────────────────────────────────────────────────
+    -- FIX: _activeDragFn/_activeEndFn are WINDOW-LEVEL so every tab's registerDrag()
+    -- writes to the same variables that the single shared UIS listener reads.
+    -- Previously they were local inside each CreateTab() call, so tabs 2+ had
+    -- dead drag callbacks — sliders didn't slide and GUI drag never unlocked.
+    local _activeDragFn = nil
+    local _activeEndFn  = nil
+
     local Window = {
         _tabs               = {},
         _activeTab          = nil,
@@ -685,9 +697,12 @@ function Library:CreateWindow(Config)
         bgTransSlider = Tab:CreateSlider("Transparency", 0, 100,
             math.floor((bgImageTrans or 0.85) * 100),
             function(val)
+                -- FIX: update live directly on the ImageLabel — no full re-apply needed.
+                -- 0 = fully opaque image, 100 = invisible (transparent).
                 bgImageTrans = val / 100
-                if bgImageLabel and bgImageLabel.Visible then
+                if bgImageLabel then
                     bgImageLabel.ImageTransparency = bgImageTrans
+                    if bgImageLabel.Image ~= "" then bgImageLabel.Visible = true end
                 end
             end
         )
@@ -1277,13 +1292,13 @@ function Library:CreateWindow(Config)
             return f
         end
 
-        -- Shared drag dispatcher for all sliders/pickers in this tab
-        local _activeDragFn = nil
-        local _activeEndFn  = nil
+        -- Shared drag dispatcher — registerDrag writes to window-level _activeDragFn
+        -- and _activeEndFn which the single global UIS listener (registered once below)
+        -- always reads. All tabs share the same two variables.
         local function registerDrag(beginInput, moveFn, endFn)
             _activeDragFn = moveFn
             _activeEndFn  = endFn
-            moveFn(beginInput)
+            moveFn(beginInput)  -- apply position immediately on click
         end
         if not Window._sharedInputChangedConn then
             Window._sharedInputChangedConn = true
@@ -1301,6 +1316,7 @@ function Library:CreateWindow(Config)
                     _activeEndFn(i)
                     _activeDragFn = nil
                     _activeEndFn  = nil
+                    _anySliderDragging = false  -- always clear the drag-lock on release
                 end
             end))
         end
