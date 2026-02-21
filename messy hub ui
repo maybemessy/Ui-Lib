@@ -1,4 +1,28 @@
 --// GameHub — v1.0
+--// Companion launcher for MessyHub-style scripts
+--// Left sidebar: category tabs + game list
+--// Right panel: game info, console log, Load button
+--// Usage:
+--[[
+    local Hub = loadstring(game:HttpGet("YOUR_GAMEHUB_URL"))()
+    local Launcher = Hub:CreateLauncher({
+        Name = "My Hub",
+        Games = {
+            {
+                Name        = "Blox Fruits",
+                Icon        = "🍎",            -- emoji OR rbxassetid://...
+                Category    = "Adventure",
+                Description = "Auto farm, boss esp, devil fruit notifier and more.",
+                ScriptUrl   = "https://raw.githubusercontent.com/.../bloxfruits.lua",
+                Tags        = {"Farm", "ESP", "TP"},
+            },
+            ...
+        }
+    })
+--]]
+
+local GameHub = {}
+
 -- ── Services ──────────────────────────────────────────────────────────────────
 local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
@@ -406,7 +430,7 @@ function GameHub:CreateLauncher(Config)
         Font=Enum.Font.GothamBold,
         TextColor3=C.TxtMuted,
         TextXAlignment=Enum.TextXAlignment.Left,
-        LetterSpacing=3,
+
         Visible=false,
         ZIndex=4,
     })
