@@ -219,12 +219,14 @@ function GameHub:CreateLauncher(Config)
         BackgroundColor3 = C.Accent,
         Rotation         = 45, ZIndex = 6,
     }); Corner(dia, 2)
-    Frame(dia, {
+    -- FIX: store inner frame reference directly so Corner() isn't called via
+    -- FindFirstChildWhichIsA (which could pick up the UICorner itself)
+    local diaIn = Frame(dia, {
         Size             = UDim2.new(0,4,0,4),
         Position         = UDim2.new(0.5,-2,0.5,-2),
         BackgroundColor3 = Color3.fromRGB(10,10,13),
         ZIndex           = 7,
-    }); Corner(dia:FindFirstChildWhichIsA("Frame"), 1)
+    }); Corner(diaIn, 1)
 
     Label(titleBar, {
         Size              = UDim2.new(1,-80,1,0),
@@ -523,7 +525,10 @@ function GameHub:CreateLauncher(Config)
         for _,c in ipairs(consoleScroll:GetChildren()) do
             if c:IsA("TextLabel") then c:Destroy() end
         end
-        -- FIX #4 — reset scroll to top when clearing (switching games)
+        -- Force canvas back to top immediately after children are gone.
+        -- Also zero out CanvasSize so AutomaticCanvasSize recalculates from scratch
+        -- and doesn't leave a phantom scroll range that pushes new logs down.
+        consoleScroll.CanvasSize     = UDim2.new(0,0,0,0)
         consoleScroll.CanvasPosition = Vector2.new(0, 0)
     end
 
@@ -549,7 +554,7 @@ function GameHub:CreateLauncher(Config)
             BackgroundTransparency = 1,
             ZIndex                 = 5,
         })
-        -- scroll to bottom after new log line renders
+        -- Scroll to bottom after the new line has rendered
         task.defer(function()
             if consoleScroll and consoleScroll.Parent then
                 consoleScroll.CanvasPosition = Vector2.new(0,
@@ -558,6 +563,15 @@ function GameHub:CreateLauncher(Config)
             end
         end)
         return lbl
+    end
+
+    -- Logs a message after a delay (seconds). Used for staggered load output.
+    local function logAfter(secs, msg, kind)
+        task.delay(secs, function()
+            if consoleScroll and consoleScroll.Parent then
+                log(msg, kind)
+            end
+        end)
     end
 
     -- ── Game card / detail ────────────────────────────────────────────────────
@@ -627,10 +641,12 @@ function GameHub:CreateLauncher(Config)
                 log("No script URL configured.", "err")
                 return
             end
-            loadLbl.Text    = "Loading..."
-            loadSpinner.Text= "⟳"
-            loadBtn.Active  = false
 
+            loadLbl.Text     = "Loading..."
+            loadSpinner.Text = "⟳"
+            loadBtn.Active   = false
+
+            -- Spinner animation
             local spinConn
             local rot = 0
             spinConn = RunService.Heartbeat:Connect(function(dt)
@@ -642,32 +658,77 @@ function GameHub:CreateLauncher(Config)
                 end
             end)
 
-            log("Fetching script from GitHub...", "info")
+            -- Step 1: show intent immediately
+            log("━━━━━━━━━━━━━━━━━━━━━━━━", "sys")
+            log("Game    : " .. gameData.Name, "sys")
+            log("Category: " .. (gameData.Category or "Unknown"), "sys")
+            logAfter(0.05, "Resolving URL...", "info")
+            logAfter(0.12, gameData.ScriptUrl, "sys")
+
             task.spawn(function()
-                -- FIX #1 — use RobloxGame (cached at top) instead of `game`,
-                -- which would resolve to gameData (the config table) here and
-                -- throw "attempt to call missing method 'HttpGet' of table".
+                task.wait(0.18)
+                log("Connecting to host...", "info")
+                task.wait(0.10)
+                log("Sending HTTP GET request...", "info")
+
+                -- Step 2: fetch
                 local ok, result = pcall(function()
                     return RobloxGame:HttpGet(gameData.ScriptUrl)
                 end)
                 spinConn:Disconnect()
-                if ok and result and result ~= "" then
-                    log("Fetched "..#result.." bytes.", "ok")
-                    log("Executing script...", "info")
-                    local run_ok, run_err = pcall(loadstring(result))
-                    if run_ok then
-                        log("Script loaded successfully!", "ok")
-                        loadLbl.Text     = "Loaded ✓"
-                        loadSpinner.Text = ""
-                        Tween(loadBtn, {BackgroundColor3=Color3.fromRGB(20,80,40)}, 0.2)
-                    else
-                        log("Runtime error: "..(run_err or "unknown"), "err")
-                        loadLbl.Text     = "Error — retry?"
-                        loadSpinner.Text = ""
-                    end
-                else
-                    log("Failed to fetch: "..(result or "network error"), "err")
+
+                if not ok or not result or result == "" then
+                    log("Connection failed.", "err")
+                    log("Reason: " .. tostring(result or "empty response"), "err")
+                    log("Check the ScriptUrl is a valid raw GitHub link.", "sys")
                     loadLbl.Text     = "Failed — retry"
+                    loadSpinner.Text = ""
+                    loadBtn.Active   = true
+                    return
+                end
+
+                -- Step 3: download info
+                local bytes   = #result
+                local kbStr   = string.format("%.1f", bytes / 1024)
+                local lines   = 0
+                for _ in result:gmatch("\n") do lines += 1 end
+
+                log("Response received.", "ok")
+                log("Size : " .. bytes .. " bytes  (" .. kbStr .. " KB)", "sys")
+                log("Lines: ~" .. lines, "sys")
+                task.wait(0.08)
+
+                -- Step 4: compile
+                log("Compiling with loadstring...", "info")
+                task.wait(0.06)
+                local chunk, compErr = loadstring(result)
+                if not chunk then
+                    log("Compile error:", "err")
+                    log(tostring(compErr), "err")
+                    loadLbl.Text     = "Compile error"
+                    loadSpinner.Text = ""
+                    loadBtn.Active   = true
+                    return
+                end
+                log("Compiled OK.", "ok")
+                task.wait(0.06)
+
+                -- Step 5: execute
+                log("Executing script...", "info")
+                task.wait(0.04)
+                local run_ok, run_err = pcall(chunk)
+
+                if run_ok then
+                    log("Script executed successfully!", "ok")
+                    log("━━━━━━━━━━━━━━━━━━━━━━━━", "sys")
+                    loadLbl.Text     = "Loaded ✓"
+                    loadSpinner.Text = ""
+                    Tween(loadBtn, {BackgroundColor3=Color3.fromRGB(20,80,40)}, 0.2)
+                else
+                    log("Runtime error:", "err")
+                    log(tostring(run_err or "unknown"), "err")
+                    log("━━━━━━━━━━━━━━━━━━━━━━━━", "sys")
+                    loadLbl.Text     = "Error — retry?"
                     loadSpinner.Text = ""
                 end
                 loadBtn.Active = true
@@ -807,4 +868,8 @@ function GameHub:CreateLauncher(Config)
 
     return API
 end
+
+-- FIX — The module returns the GameHub table, so loadstring()() works
+-- regardless of what the .lua file is named on GitHub. The variable name
+-- inside this file is irrelevant; only the return value matters.
 return GameHub
