@@ -1,6 +1,5 @@
 --// GameHub — v1.0
 --// Companion launcher for MessyHub-style scripts
---// Left sidebar: category tabs + game list
 --// Right panel: game info, console log, Load button
 --// Usage:
 --[[
