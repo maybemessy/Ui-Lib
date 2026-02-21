@@ -1493,25 +1493,7 @@ function Library:CreateWindow(Config)
                 pcall(callback, s)
             end
 
-            -- PC: standard click fires correctly on TextButton
             f.MouseButton1Click:Connect(function() setState(not state) end)
-
-            -- Mobile: track touch start/end with movement threshold.
-            -- Since f IS the TextButton, InputBegan/Ended fire reliably on mobile
-            -- without the ScrollingFrame eating the event.
-            local _tStart = nil
-            f.InputBegan:Connect(function(i)
-                if i.UserInputType == Enum.UserInputType.Touch then
-                    _tStart = Vector2.new(i.Position.X, i.Position.Y)
-                end
-            end)
-            f.InputEnded:Connect(function(i)
-                if i.UserInputType == Enum.UserInputType.Touch and _tStart then
-                    local dist = (Vector2.new(i.Position.X, i.Position.Y) - _tStart).Magnitude
-                    if dist < 12 then setState(not state) end
-                    _tStart = nil
-                end
-            end)
 
             regElem(text, function() return state end, function(v) setState(v==true or v=="true") end)
             local ToggleObj = {}
