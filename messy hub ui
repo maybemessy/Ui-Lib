@@ -87,18 +87,22 @@ local function Frame(p,pr)  return mk("Frame",p,pr) end
 local function Label(p,pr)
     local l=mk("TextLabel",p,pr)
     l.BackgroundTransparency=1
-    l.Font=Enum.Font.GothamSemibold
-    l.TextSize=12
-    l.TextColor3=C.TxtPrimary
+    -- Apply defaults only if not overridden by props
+    if not (pr and pr.Font)     then l.Font      = Enum.Font.GothamSemibold end
+    if not (pr and pr.TextSize) then l.TextSize  = 12 end
+    if not (pr and pr.TextColor3) then l.TextColor3 = C.TxtPrimary end
+    -- Re-apply props to ensure they always win over defaults
     for k,v in pairs(pr or {}) do pcall(function() l[k]=v end) end
     return l
 end
 local function Btn(p,pr)
     local b=mk("TextButton",p,pr)
     b.AutoButtonColor=false
-    b.Font=Enum.Font.GothamBold
-    b.TextSize=12
-    b.TextColor3=C.TxtPrimary
+    -- Apply defaults only if not overridden by props
+    if not (pr and pr.Font)     then b.Font      = Enum.Font.GothamBold end
+    if not (pr and pr.TextSize) then b.TextSize  = 12 end
+    if not (pr and pr.TextColor3) then b.TextColor3 = C.TxtPrimary end
+    -- Re-apply props to ensure they always win over defaults
     for k,v in pairs(pr or {}) do pcall(function() b[k]=v end) end
     return b
 end
@@ -268,9 +272,9 @@ function GameHub:CreateLauncher(Config)
         Size             = UDim2.new(0,20,0,20),
         Position         = UDim2.new(1,-26,0.5,-10),
         BackgroundColor3 = Color3.fromRGB(55,20,20),
-        Text             = "✕",
-        Font             = Enum.Font.Legacy,  -- ✕ is U+2715, needs Legacy to render
-        TextSize         = 12,
+        Text             = "x",
+        Font             = Enum.Font.GothamBold,
+        TextSize         = 11,
         TextColor3       = Color3.fromRGB(255,100,100),
         ZIndex           = 6,
     }); Corner(closeBtn, 5)
@@ -397,12 +401,12 @@ function GameHub:CreateLauncher(Config)
     })
     Pad(header, 10, 10, 6, 0)
 
-    -- Emoji ONLY render with Font.Legacy in Roblox. Gotham variants show blank squares.
+    -- Emoji render with Font.Legacy. TextSize 13 keeps icon proportional to title.
     local gameIcon = Label(header, {
-        Size           = UDim2.new(0,22,1,0),
+        Size           = UDim2.new(0,20,1,0),
         Position       = UDim2.new(0,0,0,0),
         Text           = "🎮",
-        TextSize       = 16,
+        TextSize       = 13,
         Font           = Enum.Font.Legacy,
         TextXAlignment = Enum.TextXAlignment.Left,
         ZIndex         = 5,
@@ -879,7 +883,7 @@ function GameHub:CreateLauncher(Config)
             Size       = UDim2.new(0,24,0,24),
             Position   = UDim2.new(0,5,0.5,-12),
             Text       = g.Icon or "🎮",
-            TextSize   = 18,
+            TextSize   = 14,
             Font       = Enum.Font.Legacy,
             ZIndex     = 6,
         })
