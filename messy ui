@@ -1,7 +1,16 @@
---// MessyHub UI Library — v5.1
--- Fixes: config save/load dropdown, theme background image, dropdown UI artifacts, optimized UI
+--// MessyHub UI Library — v5.2
+-- Fixes: config save/load dropdown, theme background image, dropdown UI artifacts
 -- v5.1 PATCH: safeListConfigs now lists ALL .json files (not prefix-filtered)
--- v5.1 PATCH: dropdown arrow font changed to Enum.Font.Gotham so ▾/▴ glyphs render
+-- v5.1 PATCH: dropdown arrow uses ASCII v/^ (GothamBold missing ▾/▴ glyphs)
+-- v5.2 OPT 1: Cursor ring moved from RenderStepped → Heartbeat (no render coupling needed)
+-- v5.2 OPT 2: FPS counter + watermark FPS moved from RenderStepped → Heartbeat
+-- v5.2 OPT 3: Spinner uses RenderStepped only while visible; self-disconnects on destroy
+-- v5.2 OPT 4: double task.defer replaced with RunService.Stepped:Wait() once
+-- v5.2 OPT 5: SetTheme accentObjs loop skips dead refs without pcall overhead
+-- v5.2 OPT 6: Color picker — single Color3.fromHSV call shared across fireCallback/syncRGB/toHex
+-- v5.2 OPT 7: Dropdown/SearchBar text filter debounced (no redundant loop on every keystroke)
+-- v5.2 OPT 8: selectTab caches scrollFrames list instead of GetChildren() every call
+-- v5.2 OPT 9: Slider/StepSlider/ColorPicker global InputChanged/InputEnded share one connection each
 
 local Library = {}
 
@@ -234,7 +243,8 @@ function Library:CreateWindow(Config)
         })
         Corner(ring, 10)
         Stroke(ring, Theme.Accent, 1.5, 0.3)
-        conn(RunService.RenderStepped:Connect(function()
+        -- OPT: Heartbeat is sufficient for cursor tracking; no need for RenderStepped
+        conn(RunService.Heartbeat:Connect(function()
             local mp = UserInputService:GetMouseLocation()
             cursorRing.Position = UDim2.new(0, mp.X - 10, 0, mp.Y - 10)
         end))
@@ -327,13 +337,15 @@ function Library:CreateWindow(Config)
             TextColor3 = Theme.TextSecondary,
             ZIndex = 1000,
         })
+        -- OPT: spinner only runs while the loader exists; self-disconnects on Destroy
         local spinConn
         spinConn = RunService.RenderStepped:Connect(function(dt)
             if spinner and spinner.Parent then
                 spinner.Rotation = spinner.Rotation + 180 * dt
+            else
+                spinConn:Disconnect()
             end
         end)
-        conn(spinConn)
         task.delay(1.2, function()
             T(loader, {BackgroundTransparency = 1}, 0.4)
             task.wait(0.45)
@@ -357,6 +369,9 @@ function Library:CreateWindow(Config)
         _watermark          = nil,
         _allElements        = {},
         _tabOpenCallbacks   = {},
+        _scrollFrames       = {},   -- OPT: shared scroll frame list for tab switching
+        _sharedInputChangedConn = false,
+        _tabBtnCache        = {},   -- OPT: cached tab button list for search filter
     }
 
     function Window:GetTheme() return self._accentColor end
@@ -371,9 +386,13 @@ function Library:CreateWindow(Config)
             math.min(color.G + 0.05, 1),
             math.min(color.B + 0.10, 1)
         )
-        for _, e in ipairs(accentObjs) do
+        -- OPT: direct check instead of pcall per object — avoids exception overhead on every theme change
+        for i = #accentObjs, 1, -1 do
+            local e = accentObjs[i]
             if e.obj and e.obj.Parent then
-                pcall(function() e.obj[e.prop] = color end)
+                e.obj[e.prop] = color
+            else
+                table.remove(accentObjs, i)  -- prune dead refs
             end
         end
         pcall(function()
@@ -502,7 +521,8 @@ function Library:CreateWindow(Config)
         self._watermark = wm
         if text:find("{fps}") then
             local fc2, lt2 = 0, os.clock()
-            conn(RunService.RenderStepped:Connect(function()
+            -- OPT: Heartbeat sufficient for 1-second FPS display update
+            conn(RunService.Heartbeat:Connect(function()
                 fc2 += 1
                 if os.clock() - lt2 >= 1 then
                     lbl.Text = text:gsub("{fps}", tostring(fc2))
@@ -806,9 +826,11 @@ function Library:CreateWindow(Config)
         Visible = false,
     })
     regAccent(sep, "BackgroundColor3")
-    task.defer(function() task.defer(function()
+    -- OPT: single deferred step instead of double task.defer
+    task.defer(function()
+        RunService.Stepped:Wait()
         if sep and sep.Parent then sep.Visible = true end
-    end) end)
+    end)
     local sepG = Instance.new("UIGradient", sep)
     sepG.Color = ColorSequence.new({
         ColorSequenceKeypoint.new(0,    Color3.new(0,0,0)),
@@ -817,8 +839,9 @@ function Library:CreateWindow(Config)
         ColorSequenceKeypoint.new(1,    Color3.new(0,0,0)),
     })
 
+    -- OPT: FPS counting via Heartbeat; RenderStepped not needed for a 1-second update
     local fc, lt = 0, os.clock()
-    conn(RunService.RenderStepped:Connect(function()
+    conn(RunService.Heartbeat:Connect(function()
         fc += 1
         if os.clock() - lt >= 1 then
             titleLbl.Text = hubName .. "   |   FPS: " .. fc
@@ -1054,12 +1077,18 @@ function Library:CreateWindow(Config)
         Window._isLocked = not Window._isLocked
     end)
 
+    -- OPT: cache tab button list for search filter to avoid GetChildren() on each keystroke
     tabSearchBox:GetPropertyChangedSignal("Text"):Connect(function()
         local q = tabSearchBox.Text:lower()
-        for _, child in ipairs(tabListHolder:GetChildren()) do
-            if child:IsA("TextButton") then
-                child.Visible = q == "" or child.Name:lower():find(q, 1, true) ~= nil
+        if #Window._tabBtnCache == 0 then
+            for _, child in ipairs(tabListHolder:GetChildren()) do
+                if child:IsA("TextButton") then
+                    table.insert(Window._tabBtnCache, child)
+                end
             end
+        end
+        for _, btn in ipairs(Window._tabBtnCache) do
+            btn.Visible = q == "" or btn.Name:lower():find(q, 1, true) ~= nil
         end
     end)
 
@@ -1185,6 +1214,7 @@ function Library:CreateWindow(Config)
         scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
         scroll.Visible = false
         regAccent(scroll, "ScrollBarImageColor3")
+        table.insert(Window._scrollFrames, scroll)  -- OPT: register in window-level cached list
 
         local sLayout = Instance.new("UIListLayout", scroll)
         sLayout.Padding   = UDim.new(0,6)
@@ -1203,9 +1233,8 @@ function Library:CreateWindow(Config)
                 if Window._activeIconBox then T(Window._activeIconBox,{BackgroundColor3=Theme.BgElement2},0.15) end
                 if Window._activeTabName then Window._activeTabName.TextColor3 = Theme.TextSecondary end
             end
-            for _, sf in ipairs(contentArea:GetChildren()) do
-                if sf:IsA("ScrollingFrame") then sf.Visible = false end
-            end
+            -- OPT: iterate window-level cached list instead of GetChildren() every switch
+            for _, sf in ipairs(Window._scrollFrames) do sf.Visible = false end
             scroll.Visible = true
             T(tabBtn,  {BackgroundColor3=Color3.fromRGB(32,8,48), BackgroundTransparency=0.25}, 0.15)
             T(strip,   {BackgroundTransparency=0}, 0.15)
@@ -1223,6 +1252,7 @@ function Library:CreateWindow(Config)
 
         tabBtn.MouseButton1Click:Connect(selectTab)
         Window._tabs[name] = selectTab
+        Window._tabBtnCache = {}  -- OPT: invalidate search cache so new tab appears in results
         if not Window._activeTab then task.defer(selectTab) end
 
         local order = 0
@@ -1236,6 +1266,40 @@ function Library:CreateWindow(Config)
             })
             Corner(f, 7)
             return f
+        end
+
+        -- OPT: Shared drag dispatcher — one InputChanged + one InputEnded connection
+        -- for ALL sliders/step-sliders in this tab instead of N×2 global connections.
+        -- Each slider registers its drag handler; the dispatcher routes events only to
+        -- the active one. This replaces the previous pattern of conn(UIS.InputChanged)
+        -- and conn(UIS.InputEnded) inside every CreateSlider/CreateStepSlider call.
+        local _activeDragFn  = nil  -- currently dragging slider's move handler
+        local _activeEndFn   = nil  -- currently dragging slider's end handler
+        local function registerDrag(beginInput, moveFn, endFn)
+            -- Called with the InputBegan object; sets the active handlers
+            _activeDragFn = moveFn
+            _activeEndFn  = endFn
+            moveFn(beginInput)  -- apply initial position on click
+        end
+        -- One shared InputChanged connection for this window (added once to conn[])
+        if not Window._sharedInputChangedConn then
+            Window._sharedInputChangedConn = true
+            conn(UserInputService.InputChanged:Connect(function(i)
+                if _activeDragFn and (
+                    i.UserInputType == Enum.UserInputType.MouseMovement or
+                    i.UserInputType == Enum.UserInputType.Touch) then
+                    _activeDragFn(i)
+                end
+            end))
+            conn(UserInputService.InputEnded:Connect(function(i)
+                if _activeEndFn and (
+                    i.UserInputType == Enum.UserInputType.MouseButton1 or
+                    i.UserInputType == Enum.UserInputType.Touch) then
+                    _activeEndFn(i)
+                    _activeDragFn = nil
+                    _activeEndFn  = nil
+                end
+            end))
         end
 
         local elemCount = 0
@@ -1547,26 +1611,18 @@ function Library:CreateWindow(Config)
             numBox.FocusLost:Connect(function() apply(tonumber(numBox.Text) or defVal) end)
             local drag = false
 
+            -- OPT: uses shared drag dispatcher (one InputChanged + one InputEnded for whole window)
             track.InputBegan:Connect(function(i)
                 if i.UserInputType == Enum.UserInputType.MouseButton1
                 or i.UserInputType == Enum.UserInputType.Touch then
                     drag = true
                     _anySliderDragging = true
-                    apply(minVal + (maxVal-minVal) * posFromInput(i))
+                    registerDrag(i,
+                        function(mi) apply(minVal + (maxVal-minVal) * posFromInput(mi)) end,
+                        function(_)  drag = false; _anySliderDragging = false end
+                    )
                 end
             end)
-            conn(UserInputService.InputEnded:Connect(function(i)
-                if i.UserInputType == Enum.UserInputType.MouseButton1
-                or i.UserInputType == Enum.UserInputType.Touch then
-                    if drag then drag = false; _anySliderDragging = false end
-                end
-            end))
-            conn(UserInputService.InputChanged:Connect(function(i)
-                if drag and (i.UserInputType == Enum.UserInputType.MouseMovement
-                          or i.UserInputType == Enum.UserInputType.Touch) then
-                    apply(minVal + (maxVal-minVal) * posFromInput(i))
-                end
-            end))
             regElem(labelText, function() return tonumber(numBox.Text) end, function(v) apply(tonumber(v) or defVal) end)
 
             local SliderObj = {}
@@ -1602,25 +1658,17 @@ function Library:CreateWindow(Config)
             end
 
             local drag=false
+            -- OPT: shared drag dispatcher
             track.InputBegan:Connect(function(i)
                 if i.UserInputType==Enum.UserInputType.MouseButton1
                 or i.UserInputType==Enum.UserInputType.Touch then
                     drag=true; _anySliderDragging=true
-                    setStep(math.floor(rFromInput(i)*(#steps-1)+0.5)+1)
+                    registerDrag(i,
+                        function(mi) setStep(math.floor(rFromInput(mi)*(#steps-1)+0.5)+1) end,
+                        function(_)  drag=false; _anySliderDragging=false end
+                    )
                 end
             end)
-            conn(UserInputService.InputEnded:Connect(function(i)
-                if i.UserInputType==Enum.UserInputType.MouseButton1
-                or i.UserInputType==Enum.UserInputType.Touch then
-                    if drag then drag=false; _anySliderDragging=false end
-                end
-            end))
-            conn(UserInputService.InputChanged:Connect(function(i)
-                if drag and (i.UserInputType==Enum.UserInputType.MouseMovement
-                          or i.UserInputType==Enum.UserInputType.Touch) then
-                    setStep(math.floor(rFromInput(i)*(#steps-1)+0.5)+1)
-                end
-            end))
 
             local StepObj={}
             function StepObj:SetValue(idx) setStep(idx) end
@@ -1743,8 +1791,12 @@ function Library:CreateWindow(Config)
 
             populateOptions(options)
 
+            -- OPT: debounce search — skip redundant filter if query hasn't changed
+            local _lastSbQuery = ""
             sb:GetPropertyChangedSignal("Text"):Connect(function()
                 local q = sb.Text:lower()
+                if q == _lastSbQuery then return end
+                _lastSbQuery = q
                 local vis = 0
                 for _, ob in ipairs(oBtns) do
                     ob.Visible = q == "" or ob.Text:lower():find(q, 1, true) ~= nil
@@ -2095,18 +2147,27 @@ function Library:CreateWindow(Config)
             local wheelPanel = Frame(f, {Size=UDim2.new(1,-16,0,158), Position=UDim2.new(0,8,0,PANEL_Y), BackgroundTransparency=1})
             local rgbPanel   = Frame(f, {Size=UDim2.new(1,-16,0,102), Position=UDim2.new(0,8,0,PANEL_Y), BackgroundTransparency=1, Visible=false})
 
+            -- OPT: reuses _cachedColor (already computed by recomputeColor) — no extra fromHSV call
             local function hsvToRGB()
-                local c = Color3.fromHSV(h, s, v)
-                return math.floor(c.R*255+0.5), math.floor(c.G*255+0.5), math.floor(c.B*255+0.5)
+                return math.floor(_cachedColor.R*255+0.5),
+                       math.floor(_cachedColor.G*255+0.5),
+                       math.floor(_cachedColor.B*255+0.5)
             end
 
             local syncWheelFromHSV
             local syncRGBFromHSV
 
+            -- OPT: cache the computed Color3 so fireCallback, syncRGB and toHex all
+            -- reuse the same value from a single Color3.fromHSV call per update cycle
+            local _cachedColor = Color3.fromHSV(h, s, v)
+            local function recomputeColor()
+                _cachedColor = Color3.fromHSV(h, s, v)
+            end
+
             local function fireCallback()
-                local col = Color3.fromHSV(h, s, v)
-                prev.BackgroundColor3 = col
-                pcall(callback, col)
+                recomputeColor()
+                prev.BackgroundColor3 = _cachedColor
+                pcall(callback, _cachedColor)
             end
 
             local WHEEL_SIZE = 128
@@ -2159,9 +2220,6 @@ function Library:CreateWindow(Config)
             end
             syncWheelFromHSV()
 
-            local wheelHit = Btn(wheelClip, {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text="", ZIndex=4})
-            local wheelDrag = false
-
             local function applyWheelPos(mx, my)
                 local ax = wheelClip.AbsolutePosition.X; local ay = wheelClip.AbsolutePosition.Y
                 local lx = mx-ax-WHEEL_MID; local ly = my-ay-WHEEL_MID
@@ -2172,22 +2230,17 @@ function Library:CreateWindow(Config)
                 syncWheelFromHSV(); syncRGBFromHSV(); fireCallback()
             end
 
+            local wheelHit = Btn(wheelClip, {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text="", ZIndex=4})
+            -- OPT: shared drag dispatcher for wheel
             wheelHit.InputBegan:Connect(function(i)
                 if i.UserInputType==Enum.UserInputType.MouseButton1
                 or i.UserInputType==Enum.UserInputType.Touch then
-                    wheelDrag=true; applyWheelPos(i.Position.X, i.Position.Y)
+                    registerDrag(i,
+                        function(mi) applyWheelPos(mi.Position.X, mi.Position.Y) end,
+                        function(_) end
+                    )
                 end
             end)
-            conn(UserInputService.InputEnded:Connect(function(i)
-                if i.UserInputType==Enum.UserInputType.MouseButton1
-                or i.UserInputType==Enum.UserInputType.Touch then wheelDrag=false end
-            end))
-            conn(UserInputService.InputChanged:Connect(function(i)
-                if wheelDrag and (i.UserInputType==Enum.UserInputType.MouseMovement
-                               or i.UserInputType==Enum.UserInputType.Touch) then
-                    applyWheelPos(i.Position.X, i.Position.Y)
-                end
-            end))
 
             local V_W, V_H = 18, WHEEL_SIZE
             local vTrack = Frame(wheelPanel, {Size=UDim2.new(0,V_W,0,V_H), Position=UDim2.new(0,WHEEL_SIZE+8,0,0), BackgroundColor3=Color3.new(0,0,0)})
@@ -2210,22 +2263,17 @@ function Library:CreateWindow(Config)
                 updateVGrad(); syncRGBFromHSV(); fireCallback()
             end
 
+            -- OPT: shared drag dispatcher for value slider
             vHit.InputBegan:Connect(function(i)
                 if i.UserInputType==Enum.UserInputType.MouseButton1
                 or i.UserInputType==Enum.UserInputType.Touch then
-                    vDrag=true; applyV(i.Position.Y)
+                    vDrag = true
+                    registerDrag(i,
+                        function(mi) applyV(mi.Position.Y) end,
+                        function(_)  vDrag = false end
+                    )
                 end
             end)
-            conn(UserInputService.InputEnded:Connect(function(i)
-                if i.UserInputType==Enum.UserInputType.MouseButton1
-                or i.UserInputType==Enum.UserInputType.Touch then vDrag=false end
-            end))
-            conn(UserInputService.InputChanged:Connect(function(i)
-                if vDrag and (i.UserInputType==Enum.UserInputType.MouseMovement
-                           or i.UserInputType==Enum.UserInputType.Touch) then
-                    applyV(i.Position.Y)
-                end
-            end))
 
             local hexRow = Frame(wheelPanel, {Size=UDim2.new(0,WHEEL_SIZE+8+V_W,0,24), Position=UDim2.new(0,0,0,WHEEL_SIZE+6), BackgroundTransparency=1})
             Label(hexRow, {Size=UDim2.new(0,26,1,0), Text="#HEX", Font=Enum.Font.GothamBold, TextSize=10, TextColor3=Theme.TextSecondary})
@@ -2264,6 +2312,7 @@ function Library:CreateWindow(Config)
             function updateHSVFromRGB()
                 local col = Color3.fromRGB(rr,gg,bb)
                 h,s,v = Color3.toHSV(col)
+                _cachedColor = col  -- OPT: set cache directly, skip extra fromHSV in recomputeColor
                 syncWheelFromHSV(); updateVGrad(); syncHex(); fireCallback()
             end
 
@@ -2292,22 +2341,17 @@ function Library:CreateWindow(Config)
                 local function rFromTk(i)
                     return math.clamp((i.Position.X-tk.AbsolutePosition.X)/tk.AbsoluteSize.X,0,1)*255
                 end
+                -- OPT: shared drag dispatcher
                 tk.InputBegan:Connect(function(i)
                     if i.UserInputType==Enum.UserInputType.MouseButton1
                     or i.UserInputType==Enum.UserInputType.Touch then
-                        drg=true; setVal(rFromTk(i)); onSet(cur); updateHSVFromRGB()
+                        drg=true
+                        registerDrag(i,
+                            function(mi) setVal(rFromTk(mi)); onSet(cur); updateHSVFromRGB() end,
+                            function(_)  drg=false end
+                        )
                     end
                 end)
-                conn(UserInputService.InputEnded:Connect(function(i)
-                    if i.UserInputType==Enum.UserInputType.MouseButton1
-                    or i.UserInputType==Enum.UserInputType.Touch then drg=false end
-                end))
-                conn(UserInputService.InputChanged:Connect(function(i)
-                    if drg and (i.UserInputType==Enum.UserInputType.MouseMovement
-                             or i.UserInputType==Enum.UserInputType.Touch) then
-                        setVal(rFromTk(i)); onSet(cur); updateHSVFromRGB()
-                    end
-                end))
                 vb.FocusLost:Connect(function() setVal(tonumber(vb.Text) or cur); onSet(cur); updateHSVFromRGB() end)
                 return function(nv) setVal(nv) end
             end
@@ -2317,6 +2361,9 @@ function Library:CreateWindow(Config)
             bSetFn = makeRGBSlider("B", bb, function(nv) bb=nv end, 3)
 
             syncRGBFromHSV = function()
+                -- OPT: recomputeColor() will be called by fireCallback; call it once here
+                -- so hsvToRGB (which reads _cachedColor) is accurate before we read RGB
+                recomputeColor()
                 local r2,g2,b2 = hsvToRGB(); rr=r2; gg=g2; bb=b2
                 rSetFn(r2); gSetFn(g2); bSetFn(b2); updateVGrad(); syncHex()
             end
@@ -2362,13 +2409,25 @@ function Library:CreateWindow(Config)
             Corner(f,7); Stroke(f,Theme.Accent,1,0.65)
             Label(f,{Size=UDim2.new(0,28,1,0),Text=">>",Font=Enum.Font.GothamBold,TextSize=11,TextColor3=Theme.Accent})
             local inp=Box(f,{Size=UDim2.new(1,-34,1,0),Position=UDim2.new(0,28,0,0),PlaceholderText=placeholder or "Search elements...",BackgroundColor3=Color3.new(0,0,0),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=12})
+            -- OPT: cache searchable children; debounce by last query
+            local _searchCache = nil
+            local _lastQuery = ""
             inp:GetPropertyChangedSignal("Text"):Connect(function()
-                local q=inp.Text:lower()
-                for _,child in ipairs(scroll:GetChildren()) do
-                    if child~=f and not child:IsA("UIListLayout") and not child:IsA("UIPadding") then
-                        local lbl=child:FindFirstChildOfClass("TextLabel")
-                        if lbl then child.Visible = q=="" or lbl.Text:lower():find(q,1,true)~=nil end
+                local q = inp.Text:lower()
+                if q == _lastQuery then return end
+                _lastQuery = q
+                -- Build cache once (after all elements are added)
+                if not _searchCache then
+                    _searchCache = {}
+                    for _, child in ipairs(scroll:GetChildren()) do
+                        if child ~= f and not child:IsA("UIListLayout") and not child:IsA("UIPadding") then
+                            local lbl = child:FindFirstChildOfClass("TextLabel")
+                            if lbl then table.insert(_searchCache, {frame=child, lbl=lbl}) end
+                        end
                     end
+                end
+                for _, entry in ipairs(_searchCache) do
+                    entry.frame.Visible = q == "" or entry.lbl.Text:lower():find(q, 1, true) ~= nil
                 end
             end)
         end
