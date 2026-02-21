@@ -1,4 +1,4 @@
---// GameHub — v1.1
+--// GameHub — v1.2
 --// Companion launcher for MessyHub-style scripts
 --// Left sidebar: category tabs + game list
 --// Right panel: game info, console log, Load button
@@ -268,7 +268,7 @@ function GameHub:CreateLauncher(Config)
         Size             = UDim2.new(0,20,0,20),
         Position         = UDim2.new(1,-26,0.5,-10),
         BackgroundColor3 = Color3.fromRGB(55,20,20),
-        Text             = "x", TextSize = 10,
+        Text             = "✕", TextSize = 10,
         TextColor3       = Color3.fromRGB(255,100,100),
         ZIndex           = 6,
     }); Corner(closeBtn, 5)
@@ -395,12 +395,13 @@ function GameHub:CreateLauncher(Config)
     })
     Pad(header, 10, 10, 6, 0)
 
+    -- Emoji ONLY render with Font.Legacy in Roblox. Gotham variants show blank squares.
     local gameIcon = Label(header, {
         Size           = UDim2.new(0,28,1,0),
         Position       = UDim2.new(0,0,0,0),
         Text           = "🎮",
-        TextSize       = 20,
-        Font           = Enum.Font.GothamBold,
+        TextSize       = 22,
+        Font           = Enum.Font.Legacy,
         TextXAlignment = Enum.TextXAlignment.Left,
         ZIndex         = 5,
     })
@@ -641,93 +642,220 @@ function GameHub:CreateLauncher(Config)
                 log("No script URL configured.", "err")
                 return
             end
+            loadBtn.Active = false
 
+            -- ── Aesthetic loading overlay ──────────────────────────────────────
+            -- Covers the right panel with an animated progress screen while the
+            -- script fetches and executes. Destroyed on completion or error.
+
+            local overlay = Frame(panel, {
+                Size             = UDim2.new(1,0,1,0),
+                BackgroundColor3 = C.BgWin,
+                BackgroundTransparency = 0.08,
+                ZIndex           = 20,
+            })
+            -- subtle scanline texture via gradient stripes
+            local scanGrad = Instance.new("UIGradient", overlay)
+            scanGrad.Color = ColorSequence.new{
+                ColorSequenceKeypoint.new(0,   Color3.fromRGB(20,5,35)),
+                ColorSequenceKeypoint.new(0.5, Color3.fromRGB(10,3,20)),
+                ColorSequenceKeypoint.new(1,   Color3.fromRGB(20,5,35)),
+            }
+            scanGrad.Rotation = 90
+
+            -- Glow orb behind progress bar
+            local glowOrb = Frame(overlay, {
+                Size             = UDim2.new(0,180,0,80),
+                Position         = UDim2.new(0.5,-90,0.5,-10),
+                BackgroundColor3 = C.AccentDark,
+                BackgroundTransparency = 0.3,
+                ZIndex           = 21,
+            })
+            Corner(glowOrb, 40)
+
+            -- Game name label (big, centered)
+            local ovTitle = Label(overlay, {
+                Size           = UDim2.new(1,0,0,24),
+                Position       = UDim2.new(0,0,0.5,-44),
+                Text           = gameData.Name,
+                Font           = Enum.Font.GothamBold,
+                TextSize       = 16,
+                TextColor3     = C.TxtPrimary,
+                ZIndex         = 22,
+            })
+
+            -- Status label (phase text)
+            local ovStatus = Label(overlay, {
+                Size           = UDim2.new(1,0,0,14),
+                Position       = UDim2.new(0,0,0.5,-18),
+                Text           = "Initializing...",
+                Font           = Enum.Font.Code,
+                TextSize       = 10,
+                TextColor3     = C.TxtAccent,
+                ZIndex         = 22,
+            })
+
+            -- Progress bar track
+            local barTrack = Frame(overlay, {
+                Size             = UDim2.new(0,200,0,4),
+                Position         = UDim2.new(0.5,-100,0.5,8),
+                BackgroundColor3 = Color3.fromRGB(30,10,50),
+                ZIndex           = 22,
+            })
+            Corner(barTrack, 2)
+
+            -- Progress bar fill
+            local barFill = Frame(barTrack, {
+                Size             = UDim2.new(0,0,1,0),
+                BackgroundColor3 = C.Accent,
+                ZIndex           = 23,
+            })
+            Corner(barFill, 2)
+            Grad(barFill, C.AccentMid, C.Accent, 0)
+
+            -- Percentage label
+            local pctLbl = Label(overlay, {
+                Size           = UDim2.new(1,0,0,12),
+                Position       = UDim2.new(0,0,0.5,18),
+                Text           = "0%",
+                Font           = Enum.Font.GothamBold,
+                TextSize       = 9,
+                TextColor3     = C.TxtMuted,
+                ZIndex         = 22,
+            })
+
+            -- Helper: animate bar to a target 0–1 fraction with label update
+            local function setProgress(frac, label)
+                frac = math.clamp(frac, 0, 1)
+                Tween(barFill, {Size=UDim2.new(frac,0,1,0)}, 0.28, Enum.EasingStyle.Quad)
+                ovStatus.Text = label
+                pctLbl.Text   = math.floor(frac*100).."%"
+                -- pulse glow orb colour
+                Tween(glowOrb, {BackgroundTransparency = 0.15 + (1-frac)*0.5}, 0.2)
+            end
+
+            -- Fade overlay in
+            overlay.BackgroundTransparency = 1
+            Tween(overlay, {BackgroundTransparency=0.08}, 0.22)
+            task.wait(0.05)
+
+            -- Spinner on load button text while overlay shows
             loadLbl.Text     = "Loading..."
             loadSpinner.Text = "⟳"
-            loadBtn.Active   = false
-
-            -- Spinner animation
             local spinConn
             local rot = 0
             spinConn = RunService.Heartbeat:Connect(function(dt)
-                rot = (rot + 200*dt) % 360
+                rot = (rot + 180*dt) % 360
                 if loadSpinner and loadSpinner.Parent then
                     loadSpinner.Rotation = rot
-                else
-                    spinConn:Disconnect()
-                end
+                else spinConn:Disconnect() end
             end)
 
-            -- Step 1: show intent immediately
+            -- Also log to console in background (visible after overlay gone)
             log("━━━━━━━━━━━━━━━━━━━━━━━━", "sys")
             log("Game    : " .. gameData.Name, "sys")
             log("Category: " .. (gameData.Category or "Unknown"), "sys")
-            logAfter(0.05, "Resolving URL...", "info")
-            logAfter(0.12, gameData.ScriptUrl, "sys")
+            log("URL     : " .. gameData.ScriptUrl, "sys")
 
             task.spawn(function()
+                setProgress(0.05, "Resolving host...")
                 task.wait(0.18)
-                log("Connecting to host...", "info")
-                task.wait(0.10)
-                log("Sending HTTP GET request...", "info")
+                setProgress(0.15, "Opening connection...")
+                task.wait(0.12)
+                setProgress(0.25, "Sending HTTP GET...")
+                log("Connecting to raw.githubusercontent.com...", "info")
 
-                -- Step 2: fetch
+                -- ── Fetch ─────────────────────────────────────────────────────
                 local ok, result = pcall(function()
                     return RobloxGame:HttpGet(gameData.ScriptUrl)
                 end)
                 spinConn:Disconnect()
 
                 if not ok or not result or result == "" then
+                    -- Error state
+                    setProgress(1, "Failed to fetch.")
+                    Tween(barFill, {BackgroundColor3=C.Danger}, 0.2)
+                    ovStatus.TextColor3 = C.ConsoleErr
+                    task.wait(0.4)
                     log("Connection failed.", "err")
                     log("Reason: " .. tostring(result or "empty response"), "err")
-                    log("Check the ScriptUrl is a valid raw GitHub link.", "sys")
+                    log("Tip: Make sure ScriptUrl is a valid raw GitHub link.", "sys")
+                    -- Fade out overlay
+                    Tween(overlay, {BackgroundTransparency=1}, 0.3)
+                    task.wait(0.32)
+                    overlay:Destroy()
                     loadLbl.Text     = "Failed — retry"
                     loadSpinner.Text = ""
                     loadBtn.Active   = true
                     return
                 end
 
-                -- Step 3: download info
-                local bytes   = #result
-                local kbStr   = string.format("%.1f", bytes / 1024)
-                local lines   = 0
+                -- ── Download info ─────────────────────────────────────────────
+                local bytes = #result
+                local kbStr = string.format("%.1f", bytes/1024)
+                local lines = 0
                 for _ in result:gmatch("\n") do lines += 1 end
 
-                log("Response received.", "ok")
-                log("Size : " .. bytes .. " bytes  (" .. kbStr .. " KB)", "sys")
-                log("Lines: ~" .. lines, "sys")
-                task.wait(0.08)
+                setProgress(0.55, string.format("Downloaded  %s KB  ·  ~%d lines", kbStr, lines))
+                log(string.format("Received %d bytes (%.1f KB), ~%d lines.", bytes, bytes/1024, lines), "ok")
+                task.wait(0.22)
 
-                -- Step 4: compile
-                log("Compiling with loadstring...", "info")
-                task.wait(0.06)
+                -- ── Compile ───────────────────────────────────────────────────
+                setProgress(0.70, "Compiling bytecode...")
+                log("Running loadstring...", "info")
+                task.wait(0.14)
                 local chunk, compErr = loadstring(result)
                 if not chunk then
+                    setProgress(1, "Compile error.")
+                    Tween(barFill, {BackgroundColor3=C.Danger}, 0.2)
+                    ovStatus.TextColor3 = C.ConsoleErr
+                    task.wait(0.4)
                     log("Compile error:", "err")
                     log(tostring(compErr), "err")
+                    Tween(overlay, {BackgroundTransparency=1}, 0.3)
+                    task.wait(0.32)
+                    overlay:Destroy()
                     loadLbl.Text     = "Compile error"
                     loadSpinner.Text = ""
                     loadBtn.Active   = true
                     return
                 end
-                log("Compiled OK.", "ok")
+                setProgress(0.82, "Bytecode OK  —  injecting...")
+                log("Compiled successfully.", "ok")
+                task.wait(0.18)
+
+                -- ── Execute ───────────────────────────────────────────────────
+                setProgress(0.94, "Executing script...")
+                log("Executing...", "info")
+                task.wait(0.10)
+                local run_ok, run_err = pcall(chunk)
                 task.wait(0.06)
 
-                -- Step 5: execute
-                log("Executing script...", "info")
-                task.wait(0.04)
-                local run_ok, run_err = pcall(chunk)
-
                 if run_ok then
+                    setProgress(1, "Done!  Script is running.")
+                    Tween(barFill, {BackgroundColor3=C.Success}, 0.25)
+                    ovStatus.TextColor3 = C.ConsoleTxt
                     log("Script executed successfully!", "ok")
                     log("━━━━━━━━━━━━━━━━━━━━━━━━", "sys")
+                    task.wait(0.55)
+                    -- Sweep overlay out upward
+                    Tween(overlay, {Position=UDim2.new(0,0,-1,0), BackgroundTransparency=1}, 0.35, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+                    task.wait(0.38)
+                    overlay:Destroy()
                     loadLbl.Text     = "Loaded ✓"
                     loadSpinner.Text = ""
                     Tween(loadBtn, {BackgroundColor3=Color3.fromRGB(20,80,40)}, 0.2)
                 else
+                    setProgress(1, "Runtime error.")
+                    Tween(barFill, {BackgroundColor3=C.Danger}, 0.2)
+                    ovStatus.TextColor3 = C.ConsoleErr
+                    task.wait(0.4)
                     log("Runtime error:", "err")
                     log(tostring(run_err or "unknown"), "err")
                     log("━━━━━━━━━━━━━━━━━━━━━━━━", "sys")
+                    Tween(overlay, {BackgroundTransparency=1}, 0.3)
+                    task.wait(0.32)
+                    overlay:Destroy()
                     loadLbl.Text     = "Error — retry?"
                     loadSpinner.Text = ""
                 end
@@ -749,7 +877,8 @@ function GameHub:CreateLauncher(Config)
             Size       = UDim2.new(0,24,0,24),
             Position   = UDim2.new(0,5,0.5,-12),
             Text       = g.Icon or "🎮",
-            TextSize   = 16,
+            TextSize   = 18,
+            Font       = Enum.Font.Legacy,
             ZIndex     = 6,
         })
         Label(card, {
