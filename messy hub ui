@@ -1,28 +1,4 @@
 --// GameHub — v1.0
---// Companion launcher for MessyHub-style scripts
---// Left sidebar: category tabs + game list
---// Right panel: game info, console log, Load button
---// Usage:
---[[
-    local Hub = loadstring(game:HttpGet("YOUR_GAMEHUB_URL"))()
-    local Launcher = Hub:CreateLauncher({
-        Name = "My Hub",
-        Games = {
-            {
-                Name        = "Blox Fruits",
-                Icon        = "🍎",            -- emoji OR rbxassetid://...
-                Category    = "Adventure",
-                Description = "Auto farm, boss esp, devil fruit notifier and more.",
-                ScriptUrl   = "https://raw.githubusercontent.com/.../bloxfruits.lua",
-                Tags        = {"Farm", "ESP", "TP"},
-            },
-            ...
-        }
-    })
---]]
-
-local GameHub = {}
-
 -- ── Services ──────────────────────────────────────────────────────────────────
 local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
@@ -156,11 +132,12 @@ function GameHub:CreateLauncher(Config)
         if not catSet[c] then catSet[c]=true; table.insert(cats,c) end
     end
 
-    -- ── ScreenGui ─────────────────────────────────────────────────────────────
-    local sg = mk("ScreenGui", nil, {
-        Name=randName(), ResetOnSpawn=false,
-        IgnoreGuiInset=true, DisplayOrder=99999998,
-    })
+    -- ── ScreenGui — created directly, NOT via mk(), to avoid BorderSizePixel error ──
+    local sg = Instance.new("ScreenGui")
+    sg.Name            = randName()
+    sg.ResetOnSpawn    = false
+    sg.IgnoreGuiInset  = true
+    sg.DisplayOrder    = 99999998
     if gethui then sg.Parent=gethui()
     elseif typeof(syn)=="table" and syn.protect_gui then syn.protect_gui(sg); sg.Parent=CoreGui
     elseif typeof(protect_gui)=="function" then protect_gui(sg); sg.Parent=CoreGui
