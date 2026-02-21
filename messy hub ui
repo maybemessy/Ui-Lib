@@ -268,7 +268,7 @@ function GameHub:CreateLauncher(Config)
         Size             = UDim2.new(0,20,0,20),
         Position         = UDim2.new(1,-26,0.5,-10),
         BackgroundColor3 = Color3.fromRGB(55,20,20),
-        Text             = "✕", TextSize = 10,
+        Text             = "x", TextSize = 10,
         TextColor3       = Color3.fromRGB(255,100,100),
         ZIndex           = 6,
     }); Corner(closeBtn, 5)
