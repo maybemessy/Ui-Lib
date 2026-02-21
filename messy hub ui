@@ -1,5 +1,6 @@
 --// GameHub — v1.0
 --// Companion launcher for MessyHub-style scripts
+--// Left sidebar: category tabs + game list
 --// Right panel: game info, console log, Load button
 --// Usage:
 --[[
@@ -65,7 +66,11 @@ local function rng(n) return string.char(math.random(65,90)) .. math.random(1000
 
 local function mk(cls, parent, props)
     local o = Instance.new(cls, parent)
-    o.BorderSizePixel = 0
+    -- FIX: only set BorderSizePixel on GuiObject subclasses (Frame, TextButton etc.)
+    -- ScreenGui, ScrollingFrame internals, etc. do NOT have this property.
+    if o:IsA("GuiObject") then
+        o.BorderSizePixel = 0
+    end
     for k,v in pairs(props or {}) do
         if k ~= "BorderSizePixel" then
             pcall(function() o[k] = v end)
