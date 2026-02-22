@@ -1007,18 +1007,24 @@ function Library:CreateWindow(Config)
     local tabSearchPad = Instance.new("UIPadding", tabSearchBox)
     tabSearchPad.PaddingLeft = UDim.new(0,6)
 
-    local tabListHolder = Frame(sidebar, {
-        Size = UDim2.new(1,0,1,-58),
-        Position = UDim2.new(0,0,0,34),
-        BackgroundTransparency = 1,
-    })
+    local tabListHolder = Instance.new("ScrollingFrame", sidebar)
+    tabListHolder.Size                 = UDim2.new(1, 0, 1, -58)
+    tabListHolder.Position             = UDim2.new(0, 0, 0, 34)
+    tabListHolder.BackgroundTransparency = 1
+    tabListHolder.BorderSizePixel      = 0
+    tabListHolder.ScrollBarThickness   = 3
+    tabListHolder.ScrollBarImageColor3 = Theme.Accent
+    tabListHolder.CanvasSize           = UDim2.new(0, 0, 0, 0)
+    tabListHolder.AutomaticCanvasSize  = Enum.AutomaticSize.Y
+    tabListHolder.ScrollingDirection   = Enum.ScrollingDirection.Y
+    
     local tabLayout = Instance.new("UIListLayout", tabListHolder)
-    tabLayout.Padding   = UDim.new(0,2)
+    tabLayout.Padding   = UDim.new(0, 2)
     tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
     local tabPad = Instance.new("UIPadding", tabListHolder)
-    tabPad.PaddingLeft  = UDim.new(0,5)
-    tabPad.PaddingRight = UDim.new(0,5)
-    tabPad.PaddingTop   = UDim.new(0,3)
+    tabPad.PaddingLeft  = UDim.new(0, 5)
+    tabPad.PaddingRight = UDim.new(0, 5)
+    tabPad.PaddingTop   = UDim.new(0, 3)
 
     Label(sidebar, {
         Size = UDim2.new(1,0,0,20),
